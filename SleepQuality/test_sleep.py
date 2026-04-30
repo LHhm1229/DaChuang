@@ -28,7 +28,7 @@ def generate_sleep_signal_multi_stage(fs=100):
 
     # Epoch 1: Deep Sleep (30-60s)
     # Target: std < 0.05
-    signal_sim[30*fs:60*fs] = 0.5 + 0.02 * np.random.randn(30*fs)
+    signal_sim[30*fs:60*fs] = 0.5 + 0.01 * np.random.randn(30*fs)
 
     # Epoch 2: Light Sleep (60-90s)
     # Target: Moderate std (e.g. 0.15) to avoid N3 (<0.05)
