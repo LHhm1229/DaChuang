@@ -1,0 +1,28 @@
+*/node_modules/
+*/idea/
+*/.venv/
+*/env/
+*/venv_new/
+
+# Python dependencies
+site-packages/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# Build outputs
+build/
+*/build/
+dist/
+*/dist/
+
+# Environment files
+.env
+.env.*
+*.local
+
+# Lock files
+package-lock.json
+server-package.json
