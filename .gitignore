@@ -1,8 +1,9 @@
 */node_modules/
-*/idea/
+*/.idea/
 */.venv/
 */env/
 */venv_new/
+*/.vscode/
 
 # Python dependencies
 site-packages/
