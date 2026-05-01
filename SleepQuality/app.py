@@ -32,18 +32,20 @@ def to_jsonable(obj):
 
 
 bluetooth_data = []
+start_sleep_time = None
+
+SLEEP_WINDOW_SECONDS = 30
+SAMPLING_RATE = 100
+SLEEP_MIN_SAMPLES = SAMPLING_RATE * 3
+
+sleep_signal_buffer = []
+last_sleep_output = None
+
 data_stats = {
     "totalReceived": 0,
     "lastUpdate": None,
     "bufferSize": 0,
 }
-
-SLEEP_WINDOW_SECONDS = 300
-SAMPLING_RATE = 100
-SLEEP_MIN_SAMPLES = SAMPLING_RATE * 30
-
-sleep_signal_buffer = []
-last_sleep_output = None
 
 ws_clients = set()
 
@@ -56,9 +58,9 @@ def safe_ws_send(ws, payload: dict) -> bool:
         return False
 
 
-@sock.route('/ws')
+@sock.route("/ws")
 def ws_handler(ws):
-    print("[WS] Client connected")
+    print("[WS] 前端客户端已连接")
     ws_clients.add(ws)
 
     safe_ws_send(ws, {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
@@ -72,6 +74,7 @@ def ws_handler(ws):
             msg = ws.receive()
             if msg is None:
                 break
+
             try:
                 obj = json.loads(msg)
                 if isinstance(obj, dict) and obj.get("type") == "ping":
@@ -79,11 +82,12 @@ def ws_handler(ws):
                     continue
             except Exception:
                 pass
+
     except Exception as e:
-        print("[WS] Exception:", e)
+        print("WebSocket 连接异常：", e)
     finally:
         ws_clients.discard(ws)
-        print("[WS] Client disconnected")
+        print("[WS] 前端客户端已断开")
 
 
 def broadcast(payload: dict):
@@ -144,16 +148,20 @@ def get_sleep_quality_latest():
     return jsonify({"success": True, "data": to_jsonable(last_sleep_output)})
 
 
-@app.route('/', methods=['GET'])
+@app.route("/", methods=["GET"])
 def index():
     return jsonify({"message": "Sleep Quality Monitoring Backend is Running", "time": datetime.now().isoformat()})
 
 
-@app.route('/api/bluetooth-data', methods=['POST'])
+@app.route("/api/bluetooth-data", methods=["POST"])
 def receive_bluetooth_data():
-    global bluetooth_data, data_stats, sleep_signal_buffer, last_sleep_output
+    global bluetooth_data, data_stats, sleep_signal_buffer, last_sleep_output, start_sleep_time
+    print(f"[API] 收到数据请求: {request.method} {request.path}")
 
     try:
+        if start_sleep_time is None:
+            start_sleep_time = datetime.now()
+
         body = request.get_json(force=True, silent=False) or {}
         raw_data = body.get("rawData")
         timestamp = body.get("timestamp")
@@ -178,16 +186,16 @@ def receive_bluetooth_data():
         data_stats["bufferSize"] = len(bluetooth_data)
 
         time_str = datetime.now().strftime("%H:%M:%S")
-        print(f"\n[DATA] [{time_str}] Bluetooth data received #{data_stats['totalReceived']}")
-        print(f"   Quality: {data_point['signalQuality']}% | Buffer: {len(bluetooth_data)} | Received: {data_point['receivedAt']}")
+        print(f"\n[DATA] [{time_str}] 蓝牙数据接收 #{data_stats['totalReceived']}")
+        print(f"   信号质量: {data_point['signalQuality']}% | 缓冲区: {len(bluetooth_data)} | 接收: {data_point['receivedAt']}")
 
         if data_stats["totalReceived"] % 10 == 0:
             stats = calculate_stats()
-            print("\n[STATS] (every 10):")
-            print(f"   Total: {data_stats['totalReceived']}")
-            print(f"   Avg Interval: {stats['averageInterval']}ms")
-            print(f"   Range: [{stats['min']:.3f}, {stats['max']:.3f}]")
-            print(f"   StdDev: {stats['stdDev']:.3f}")
+            print("\n[STATS] 数据统计 (每10次):")
+            print(f"   总接收次数: {data_stats['totalReceived']}")
+            print(f"   平均间隔: {stats['averageInterval']}ms")
+            print(f"   数据范围: [{stats['min']:.3f}, {stats['max']:.3f}]")
+            print(f"   标准差: {stats['stdDev']:.3f}")
 
         try:
             chunk = data_point["rawData"] or []
@@ -207,6 +215,13 @@ def receive_bluetooth_data():
 
                 if raw_np.size >= SLEEP_MIN_SAMPLES:
                     t0 = time.time()
+
+                    sleep_duration = datetime.now() - start_sleep_time
+                    total_seconds = int(sleep_duration.total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    sleep_time_str = f"{hours}小时{minutes}分钟"
+
                     sleep_output = run_sleep_quality_pipeline(
                         raw_signal=raw_np,
                         sampling_rate=SAMPLING_RATE
@@ -218,19 +233,19 @@ def receive_bluetooth_data():
 
                     dt_ms = (time.time() - t0) * 1000.0
                     print(
-                        f"[ALGO] SLEEP QUALITY computed | n={raw_np.size} | cost={dt_ms:.1f}ms "
+                        f"[ALGO] SLEEP computed | n={raw_np.size} | cost={dt_ms:.1f}ms "
                         f"| score={sleep_output.get('qualityScore')} "
-                        f"| currentStage={sleep_output.get('currentStageName')}"
+                        f"| stage={sleep_output.get('currentStageName')}"
                     )
         except Exception as fe:
-            print("[ALGO] Sleep quality computation failed:", fe)
+            print("[ALGO] 睡眠质量算法计算失败：", fe)
 
         broadcast_data(data_point)
 
-        return jsonify({"success": True, "message": "Data received successfully"})
+        return jsonify({"success": True, "message": "数据接收成功"})
 
     except Exception as e:
-        print("[DATA] Error processing bluetooth data:", e)
+        print("❌ 处理蓝牙数据失败:", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -243,31 +258,24 @@ def get_stats():
 
 @app.route("/api/clear-buffer", methods=["POST"])
 def clear_buffer():
-    global bluetooth_data, data_stats, sleep_signal_buffer, last_sleep_output
+    global bluetooth_data, data_stats, sleep_signal_buffer, last_sleep_output, start_sleep_time
     cleared_count = len(bluetooth_data)
     bluetooth_data = []
     sleep_signal_buffer = []
     last_sleep_output = None
+    start_sleep_time = None
     data_stats["bufferSize"] = 0
-
-    print(f"[BUFFER] Cleared {cleared_count} items from buffer")
-
-    return jsonify({
-        "success": True,
-        "message": f"Cleared {cleared_count} items",
-        "clearedCount": cleared_count,
-    })
+    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据")
+    return jsonify({"success": True, "message": f"已清空 {cleared_count} 条数据", "clearedCount": cleared_count})
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     PORT = 3001
-    print("[SERVER] Sleep Quality Backend starting...")
-    print(f"   URL: http://localhost:{PORT}")
-    print(f"   WS:  ws://localhost:{PORT}/ws")
-    print(f"   API (POST data): http://localhost:{PORT}/api/bluetooth-data")
-    print(f"   API (GET stats): http://localhost:{PORT}/api/stats")
-    print(f"   API (POST clear): http://localhost:{PORT}/api/clear-buffer")
-    print("\nWaiting for bluetooth data...\n")
-
-    # Flask 自带开发服务器（带 WebSocket 支持）
-    app.run(host='0.0.0.0', port=PORT, debug=True)
+    print("[SERVER] 睡眠质量后端服务已启动")
+    print(f"   HTTP:      http://localhost:{PORT}")
+    print(f"   WebSocket: ws://localhost:{PORT}/ws")
+    print(f"   POST BT:   http://localhost:{PORT}/api/bluetooth-data")
+    print(f"   GET stats: http://localhost:{PORT}/api/stats")
+    print(f"   GET sleep: http://localhost:{PORT}/api/sleep-quality-latest")
+    print(f"   clear:     http://localhost:{PORT}/api/clear-buffer\n")
+    app.run(host="0.0.0.0", port=PORT, debug=True)
