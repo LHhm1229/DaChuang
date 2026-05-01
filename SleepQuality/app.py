@@ -2,16 +2,26 @@ import json
 import time
 from datetime import datetime
 
+# 必须在其他导入之前注入eventlet猴子补丁
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_sock import Sock
+from flask_socketio import SocketIO, emit
 
 import numpy as np
 from algorithm.sleep_quality import run_sleep_quality_pipeline
 
 app = Flask(__name__)
-CORS(app)
-sock = Sock(app)
+CORS(app, origins="*")
+
+# 使用Flask-SocketIO配置
+socketio = SocketIO(app, 
+                   async_mode='eventlet',
+                   ping_interval=25,    # 心跳间隔25秒
+                   ping_timeout=120,    # 心跳超时120秒
+                   cors_allowed_origins="*")
 
 
 def to_jsonable(obj):
@@ -47,65 +57,37 @@ data_stats = {
     "bufferSize": 0,
 }
 
-ws_clients = set()
 
-
-def safe_ws_send(ws, payload: dict) -> bool:
-    try:
-        ws.send(json.dumps(payload, ensure_ascii=False))
-        return True
-    except Exception:
-        return False
-
-
-@sock.route("/ws")
-def ws_handler(ws):
-    print("[WS] 前端客户端已连接")
-    ws_clients.add(ws)
-
-    safe_ws_send(ws, {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
-    safe_ws_send(ws, {"type": "stats", "data": to_jsonable(data_stats)})
-
+@socketio.on('connect')
+def handle_connect():
+    print("[WS] Client connected")
+    emit('hello', {"serverTime": datetime.utcnow().isoformat() + "Z"})
+    emit('stats', to_jsonable(data_stats))
     if last_sleep_output is not None:
-        safe_ws_send(ws, {"type": "sleepQuality", "data": to_jsonable(last_sleep_output)})
-
-    try:
-        while True:
-            msg = ws.receive()
-            if msg is None:
-                break
-
-            try:
-                obj = json.loads(msg)
-                if isinstance(obj, dict) and obj.get("type") == "ping":
-                    safe_ws_send(ws, {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
-                    continue
-            except Exception:
-                pass
-
-    except Exception as e:
-        print("WebSocket 连接异常：", e)
-    finally:
-        ws_clients.discard(ws)
-        print("[WS] 前端客户端已断开")
+        emit('sleepQuality', to_jsonable(last_sleep_output))
 
 
-def broadcast(payload: dict):
-    dead = []
-    for client in list(ws_clients):
-        ok = safe_ws_send(client, payload)
-        if not ok:
-            dead.append(client)
-    for c in dead:
-        ws_clients.discard(c)
+@socketio.on('disconnect')
+def handle_disconnect():
+    print("[WS] Client disconnected")
 
 
-def broadcast_data(data_point):
-    broadcast({"type": "bluetooth_data", "data": to_jsonable(data_point)})
+@socketio.on('ping')
+def handle_ping(data):
+    emit('pong', {"ts": int(time.time() * 1000)})
 
 
 def broadcast_sleep_quality(sleep_output: dict):
-    broadcast({"type": "sleepQuality", "data": to_jsonable(sleep_output)})
+    socketio.emit('sleepQuality', to_jsonable(sleep_output))
+    try:
+        client_count = len(socketio.server.manager.rooms.get('/', {}))
+    except Exception:
+        client_count = 'unknown'
+    print(f"[WS] Broadcast sleepQuality to {client_count} clients")
+
+
+def broadcast_data(data_point):
+    socketio.emit('bluetooth_data', to_jsonable(data_point))
 
 
 def calculate_stats():
@@ -229,6 +211,8 @@ def receive_bluetooth_data():
                     sleep_output = to_jsonable(sleep_output)
                     last_sleep_output = sleep_output
 
+                    # 使用eventlet.sleep释放协程控制权
+                    eventlet.sleep(0.005)
                     broadcast_sleep_quality(sleep_output)
 
                     dt_ms = (time.time() - t0) * 1000.0
@@ -273,9 +257,9 @@ if __name__ == "__main__":
     PORT = 3001
     print("[SERVER] 睡眠质量后端服务已启动")
     print(f"   HTTP:      http://localhost:{PORT}")
-    print(f"   WebSocket: ws://localhost:{PORT}/ws")
+    print(f"   SocketIO:  http://localhost:{PORT}/socket.io")
     print(f"   POST BT:   http://localhost:{PORT}/api/bluetooth-data")
     print(f"   GET stats: http://localhost:{PORT}/api/stats")
     print(f"   GET sleep: http://localhost:{PORT}/api/sleep-quality-latest")
     print(f"   clear:     http://localhost:{PORT}/api/clear-buffer\n")
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    socketio.run(app, host="0.0.0.0", port=PORT, debug=True)

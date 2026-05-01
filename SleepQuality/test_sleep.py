@@ -10,54 +10,8 @@ API_URL = "http://127.0.0.1:3001/api/bluetooth-data"
 ROOT_URL = "http://127.0.0.1:3001/"
 HEADERS = {'Content-Type': 'application/json'}
 
-<<<<<<< HEAD
+
 def check_server():
-=======
-def generate_sleep_signal_multi_stage(fs=100):
-    """
-    Generate multiple epochs of sleep signal with different stages.
-    Epoch 0: Wake (0) -> High std, many blinks.
-    Epoch 1: Deep Sleep (3) -> Very low std < 0.05.
-    Epoch 2: Light Sleep (2) -> Moderate std.
-    Epoch 3: REM (4) -> High freq (rem_density), low sem.
-    Total duration: 120 seconds (4 epochs)
-    """
-    duration_sec = 120
-    t = np.linspace(0, duration_sec, duration_sec * fs)
-    signal_sim = np.zeros_like(t)
-    
-    # Epoch 0: Wake (0-30s)
-    # Target: High activity, std > 0.1, many blinks.
-    signal_sim[0:30*fs] = 0.5 + 0.15 * np.random.randn(30*fs)
-    for _ in range(15): # Many blinks
-        idx = np.random.randint(0, 30*fs - 15)
-        signal_sim[idx:idx+15] -= 0.5
-
-    # Epoch 1: Deep Sleep (30-60s)
-    # Target: std < 0.05
-    signal_sim[30*fs:60*fs] = 0.5 + 0.01 * np.random.randn(30*fs)
-
-    # Epoch 2: Light Sleep (60-90s)
-    # Target: Moderate std (e.g. 0.15) to avoid N3 (<0.05)
-    signal_sim[60*fs:90*fs] = 0.5 + 0.15 * np.random.randn(30*fs)
-
-    # Epoch 3: REM (90-120s)
-    # Target: REM density > 0.3 and high rem_sem_ratio.
-    # Higher frequency oscillation (e.g. 1.5Hz) will increase rem_energy relative to sem_energy.
-    rem_osc = 0.1 * np.sin(2 * np.pi * 1.5 * t[90*fs:120*fs])
-    signal_sim[90*fs:120*fs] = 0.5 + rem_osc + 0.01 * np.random.randn(30*fs)
-
-    return signal_sim.tolist()
-
-
-def send_batch(raw_data, batch_id, signal_quality=98):
-    payload = {
-        "rawData": raw_data,
-        "timestamp": int(time.time() * 1000),
-        "signalQuality": signal_quality,
-        "values": raw_data
-    }
->>>>>>> main
     try:
         print(f"🔍 正在检查后端服务: {ROOT_URL}")
         with urllib.request.urlopen(ROOT_URL, timeout=2) as response:
@@ -71,6 +25,7 @@ def send_batch(raw_data, batch_id, signal_quality=98):
     except Exception as e:
         print(f"❌ 未知错误: {e}")
         return False
+
 
 def send_data(payload):
     try:
@@ -88,6 +43,7 @@ def send_data(payload):
     except urllib.error.URLError as e:
         print(f"\n❌ 连接失败: {e.reason}")
         return False
+
 
 def generate_signal_chunk(duration_sec, sampling_rate, state="normal"):
     """生成一段模拟的眼电信号数据"""
@@ -132,6 +88,7 @@ def generate_signal_chunk(duration_sec, sampling_rate, state="normal"):
     
     return values
 
+
 def run_test():
     print("🚀 开始睡眠质量数据传输测试...")
     print(f"🎯 目标地址: {API_URL}")
@@ -171,6 +128,7 @@ def run_test():
 
     print("\n" + "-" * 50)
     print("✅ 测试结束！请检查前端 UI 是否正确响应了以上阶段的变化。")
+
 
 if __name__ == "__main__":
     if check_server():

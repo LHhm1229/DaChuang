@@ -95,8 +95,12 @@ export default function App() {
       } else {
         console.log('[App] 数据映射返回null');
       }
+    } else if (msg.type === 'hello') {
+      console.log(`[App] 收到欢迎消息:`, msg.data);
+    } else if (msg.type === 'stats') {
+      console.log(`[App] 收到统计数据:`, msg.data);
     } else {
-      console.log(`[App] 消息类型不匹配 | 收到: ${msg.type} | 期望: ${moduleConfig.wsType}`);
+      console.log(`[App] 收到其他类型消息 | type=${msg.type}`);
     }
   }, [currentModuleType]);
 

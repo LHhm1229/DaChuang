@@ -45,7 +45,7 @@ class DryEyeSimulator:
         self.blink_start_t = 0.0
         self.current_blink_dur = 0.0
         self.current_valley = 0.0
-        self.next_blink_time = 1.0  # 第一秒开始第一次眨眼
+        self.next_blink_time = 3.0  # 第三秒开始第一次眨眼，留出初始稳定期
         self.baseline = 0.8         # 高电平基线，眨眼表现为向下的波谷 (V型)
 
     def generate_chunk(self, duration_sec, state="normal"):
@@ -56,13 +56,13 @@ class DryEyeSimulator:
         if state == "normal":
             blink_rate = 20
             base_dur = 0.15
-            inc_prob = 0.05
-            long_prob = 0.02
+            inc_prob = 0.0   # 完全没有不完全眨眼
+            long_prob = 0.0  # 完全没有长眨眼
         elif state == "dry_eye":
-            blink_rate = 6
-            base_dur = 0.06
-            inc_prob = 0.80  # 提高不完全眨眼概率
-            long_prob = 0.40 # 提高长眨眼概率
+            blink_rate = 5   # 极低频率
+            base_dur = 0.30  # 更长眨眼
+            inc_prob = 1.0   # 100%不完全眨眼
+            long_prob = 0.80 # 高长眨眼概率
         else: # poor_signal (完全随机噪声)
             for _ in range(num_samples):
                 self.t_total += 1.0 / self.sr
@@ -87,10 +87,10 @@ class DryEyeSimulator:
                 # 新算法要求：长眨眼至少 >= 500ms
                 self.current_blink_dur = 0.6 if is_long else base_dur
                 
-                # 新算法阈值：大于 0.4 算完全眨眼。
-                # 从 0.8 跌至 0.1 (振幅0.7) = 完全眨眼
-                # 从 0.8 跌至 0.6 (振幅0.2) = 不完全眨眼
-                self.current_valley = 0.6 if is_inc else 0.1
+                # 新算法阈值：大于 0.5 算完全眨眼。
+                # 从 0.8 跌至 0.05 (振幅0.75) = 完全眨眼
+                # 从 0.8 跌至 0.6 (振幅0.2) = 不完全眨眼（更容易被检测）
+                self.current_valley = 0.6 if is_inc else 0.05
 
             # 绘制眨眼波形
             if self.in_blink:
