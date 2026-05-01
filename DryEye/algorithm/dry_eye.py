@@ -57,10 +57,10 @@ def preprocess_and_calibrate(
 def detect_blink_events_wavelet(
     signal_norm: np.ndarray,
     sampling_rate: int = 100,
-    amplitude_thresh: float = 0.10, # 稍微调低以适应干眼患者微弱眨眼
-    min_duration_sec: float = 0.04, # 放宽下限，捕捉极短微眨眼
-    max_duration_sec: float = 1.0,
-    refractory_sec: float = 0.15
+    amplitude_thresh: float = 0.05, # 更低阈值以检测更多眨眼
+    min_duration_sec: float = 0.03, # 更低最小时长要求
+    max_duration_sec: float = 2.0,
+    refractory_sec: float = 0.10    # 更低不应期
 ) -> List[Dict]:
     """基于一阶差分与形态学的事件检测 (原名保留以兼容接口)"""
     events = []
@@ -139,7 +139,7 @@ def compute_dry_eye_metrics(
 
     # 【修复】使用绝对归一化阈值判断不完全眨眼，而不是动态均值
     # 假设充分的眨眼振幅应大于 0.4
-    absolute_incomplete_thresh = 0.4
+    absolute_incomplete_thresh = 0.6
     incomplete_count = sum(1 for a in amplitudes if a < absolute_incomplete_thresh)
     incomplete_ratio = incomplete_count / n_blinks
 

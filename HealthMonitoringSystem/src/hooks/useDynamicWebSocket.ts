@@ -1,10 +1,11 @@
 /**
  * useDynamicWebSocket.ts
- * 统一WebSocket通信层 - 支持动态端口切换
- * 基于《新项目数据传输方案与设计思路》的15秒心跳+断线重连机制
+ * 统一Socket.IO通信层 - 支持动态端口切换
+ * 使用socket.io-client替代原生WebSocket
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { io, Socket } from 'socket.io-client';
 
 // =========================
 // 类型定义
@@ -21,8 +22,8 @@ export interface WebSocketMessage {
 export interface UseDynamicWebSocketOptions {
   module: ModuleType;
   autoConnect?: boolean;
-  heartbeatInterval?: number;  // 默认15秒
-  reconnectDelay?: number;      // 默认3秒
+  heartbeatInterval?: number;
+  reconnectDelay?: number;
   maxReconnectAttempts?: number;
   onMessage?: (msg: WebSocketMessage) => void;
   onConnect?: () => void;
@@ -63,8 +64,8 @@ export function useDynamicWebSocket(options: UseDynamicWebSocketOptions): UseDyn
   const {
     module,
     autoConnect = true,
-    heartbeatInterval = 15000,     // 15秒心跳
-    reconnectDelay = 3000,         // 3秒重连延迟
+    heartbeatInterval = 15000,
+    reconnectDelay = 3000,
     maxReconnectAttempts = 5,
     onMessage,
     onConnect,
@@ -77,20 +78,16 @@ export function useDynamicWebSocket(options: UseDynamicWebSocketOptions): UseDyn
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
 
   // Refs
-  const wsRef = useRef<WebSocket | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const isManualDisconnectRef = useRef(false);
 
-  // 获取WebSocket URL（使用代理路径）
-  const getWebSocketUrl = useCallback((): string => {
-    return `/ws/${module}`;
-  }, [module]);
-
-  // 获取HTTP URL（使用代理路径）
-  const getHttpUrl = useCallback((): string => {
-    return `/api/${module}`;
+  // 获取Socket.IO URL
+  const getSocketUrl = useCallback((): string => {
+    const port = MODULE_PORT_MAP[module];
+    return `http://localhost:${port}`;
   }, [module]);
 
   // 启动心跳
@@ -100,8 +97,8 @@ export function useDynamicWebSocket(options: UseDynamicWebSocketOptions): UseDyn
     }
 
     heartbeatTimerRef.current = setInterval(() => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('ping', { ts: Date.now() });
       }
     }, heartbeatInterval);
   }, [heartbeatInterval]);
@@ -115,65 +112,97 @@ export function useDynamicWebSocket(options: UseDynamicWebSocketOptions): UseDyn
   }, []);
 
   // 处理消息
-  const handleMessage = useCallback((event: MessageEvent) => {
-    try {
-      const msg: WebSocketMessage = JSON.parse(event.data);
-      setLastMessage(msg);
-      console.log(`[WS] 收到消息: type=${msg.type}, data=${JSON.stringify(msg.data)?.substring(0, 100)}...`);
+  const handleMessage = useCallback((msg: WebSocketMessage) => {
+    setLastMessage(msg);
+    console.log(`[WS] 收到消息: type=${msg.type}, data=${JSON.stringify(msg.data)?.substring(0, 100)}...`);
 
-      // 回调
-      if (msg.type !== 'pong') {
-        onMessage?.(msg);
-      }
+    // 回调
+    if (msg.type !== 'pong') {
+      onMessage?.(msg);
+    }
 
-      // 连接成功时触发
-      if (msg.type === 'hello') {
-        setStatus('connected');
-        onConnect?.();
-      }
-    } catch (error) {
-      console.error('[WS] 消息解析失败:', error);
+    // 连接成功时触发（如果还没设置）
+    if (msg.type === 'hello') {
+      setStatus('connected');
+      onConnect?.();
     }
   }, [onMessage, onConnect]);
 
   // 连接
   const connect = useCallback(() => {
     // 如果已连接，先断开
-    if (wsRef.current) {
-      wsRef.current.close();
+    if (socketRef.current) {
+      socketRef.current.disconnect();
     }
 
     isManualDisconnectRef.current = false;
     setStatus('connecting');
 
-    const wsUrl = getWebSocketUrl();
-    console.log(`[WS] 正在连接 ${module} 模块 → ${wsUrl}`);
+    const socketUrl = getSocketUrl();
+    console.log(`[WS] 正在连接 ${module} 模块 → ${socketUrl}`);
 
     try {
-      const ws = new WebSocket(wsUrl);
+      const socket = io(socketUrl, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: reconnectDelay,
+        reconnectionDelayMax: 30000,
+        reconnectionAttempts: maxReconnectAttempts,
+        pingInterval: heartbeatInterval,
+        pingTimeout: 120000,
+        autoConnect: false
+      });
 
-      ws.onopen = () => {
+      socket.connect();
+
+      socket.on('connect', () => {
         console.log(`[WS] ${module} 模块连接成功`);
-        setStatus('connected');
         reconnectAttemptsRef.current = 0;
         startHeartbeat();
         onConnect?.();
-      };
+        setStatus('connected');
+      });
 
-      ws.onmessage = handleMessage;
+      // 监听所有消息类型
+      socket.on('hello', (data) => {
+        handleMessage({ type: 'hello', data });
+      });
 
-      ws.onerror = (error) => {
-        console.error(`[WS] ${module} 模块连接错误 | type: ${error.type} | message: ${error.message}`);
+      socket.on('stats', (data) => {
+        handleMessage({ type: 'stats', data });
+      });
+
+      socket.on('dryEye', (data) => {
+        handleMessage({ type: 'dryEye', data });
+      });
+
+      socket.on('sleepQuality', (data) => {
+        handleMessage({ type: 'sleepQuality', data });
+      });
+
+      socket.on('fatigue', (data) => {
+        handleMessage({ type: 'fatigue', data });
+      });
+
+      socket.on('bluetooth_data', (data) => {
+        handleMessage({ type: 'bluetooth_data', data });
+      });
+
+      socket.on('pong', (data) => {
+        handleMessage({ type: 'pong', data });
+      });
+
+      socket.on('connect_error', (error) => {
+        console.error(`[WS] ${module} 模块连接错误:`, error);
         setStatus('error');
         onError?.(error);
-      };
+      });
 
-      ws.onclose = (event) => {
-        const reason = event.code === 1000 ? '正常关闭' : 
-                      event.code === 1001 ? '端点离开' :
-                      event.code === 1006 ? '异常断开（可能是网络问题或服务端关闭）' :
-                      event.code === 1011 ? '服务端内部错误' : `未知原因 (code: ${event.code})`;
-        console.log(`[WS] ${module} 模块连接关闭 | code: ${event.code} | reason: ${reason} | wasClean: ${event.wasClean}`);
+      socket.on('disconnect', (reason) => {
+        const reasonText = reason === 'io server disconnect' ? '服务端主动断开' :
+                          reason === 'io client disconnect' ? '客户端主动断开' :
+                          reason === 'ping timeout' ? '心跳超时' : `未知原因 (${reason})`;
+        console.log(`[WS] ${module} 模块连接关闭 | reason: ${reasonText}`);
         stopHeartbeat();
         setStatus('disconnected');
         onDisconnect?.();
@@ -181,88 +210,71 @@ export function useDynamicWebSocket(options: UseDynamicWebSocketOptions): UseDyn
         if (!isManualDisconnectRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++;
           console.log(`[WS] 尝试第 ${reconnectAttemptsRef.current}/${maxReconnectAttempts} 次重连... (延迟 ${reconnectDelay}ms)`);
-          reconnectTimerRef.current = setTimeout(() => {
-            connect();
-          }, reconnectDelay);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-          console.warn(`[WS] 已达到最大重连次数 (${maxReconnectAttempts})，停止重连`);
+          console.warn(`[WS] 已达到最大重连次数 (${maxReconnectAttempts})`);
         }
-      };
+      });
 
-      wsRef.current = ws;
+      socketRef.current = socket;
     } catch (error) {
       console.error(`[WS] ${module} 模块连接异常:`, error);
       setStatus('error');
     }
-  }, [module, getWebSocketUrl, handleMessage, startHeartbeat, stopHeartbeat, onConnect, onDisconnect, onError, reconnectDelay, maxReconnectAttempts]);
+  }, [module, getSocketUrl, handleMessage, startHeartbeat, stopHeartbeat, onConnect, onDisconnect, onError, reconnectDelay, maxReconnectAttempts, heartbeatInterval]);
 
   // 断开连接
   const disconnect = useCallback(() => {
     isManualDisconnectRef.current = true;
     stopHeartbeat();
-
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
+    
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
     }
-
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
+    
     setStatus('disconnected');
-  }, [stopHeartbeat]);
+    console.log(`[WS] ${module} 模块已手动断开`);
+  }, [module, stopHeartbeat]);
 
-  // 重新连接
+  // 重连
   const reconnect = useCallback(() => {
     disconnect();
-    reconnectAttemptsRef.current = 0;
-    setTimeout(connect, 100);
+    setTimeout(() => {
+      connect();
+    }, 500);
   }, [disconnect, connect]);
 
   // 发送消息
   const sendMessage = useCallback((msg: WebSocketMessage) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
-    } else {
-      console.warn('[WS] WebSocket未连接，消息未发送');
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit(msg.type, msg.data);
     }
   }, []);
 
   // 获取统计
   const getStats = useCallback(() => {
-    sendMessage({ type: 'getStats' });
-  }, [sendMessage]);
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('stats');
+    }
+  }, []);
 
   // 获取最新数据
   const getLatest = useCallback(() => {
-    sendMessage({ type: 'getLatest' });
-  }, [sendMessage]);
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('latest');
+    }
+  }, []);
 
-  // 监听module变化，自动重连
+  // 自动连接
   useEffect(() => {
-    if (autoConnect) {
-      reconnect();
+    if (autoConnect && module !== 'gateway') {
+      connect();
     }
 
     return () => {
       disconnect();
     };
-  }, [module, autoConnect]);
-
-  // 组件卸载时清理
-  useEffect(() => {
-    return () => {
-      stopHeartbeat();
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-  }, [stopHeartbeat]);
+  }, [autoConnect, module, connect, disconnect]);
 
   return {
     status,
@@ -273,37 +285,5 @@ export function useDynamicWebSocket(options: UseDynamicWebSocketOptions): UseDyn
     reconnect,
     getStats,
     getLatest
-  };
-}
-
-// =========================
-// 便捷Hook - 获取特定模块数据
-// =========================
-export function useModuleWebSocket(module: ModuleType) {
-  const [data, setData] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleMessage = useCallback((msg: WebSocketMessage) => {
-    if (msg.type === MODULE_WS_MAP[module]) {
-      setData(msg.data);
-      setError(null);
-    } else if (msg.type === 'error') {
-      setError(msg.data?.message || '未知错误');
-    }
-  }, [module]);
-
-  const { status, connect, disconnect, reconnect } = useDynamicWebSocket({
-    module,
-    autoConnect: false,
-    onMessage: handleMessage
-  });
-
-  return {
-    data,
-    error,
-    status,
-    connect,
-    disconnect,
-    reconnect
   };
 }

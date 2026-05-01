@@ -2,17 +2,26 @@ import json
 import time
 from datetime import datetime
 
+# 必须在其他导入之前注入eventlet猴子补丁
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_sock import Sock
+from flask_socketio import SocketIO, emit
 
 import numpy as np
 from algorithm.dry_eye import run_dry_eye_pipeline
 
 app = Flask(__name__)
-CORS(app)
-sock = Sock(app)
+CORS(app, origins="*")
 
+# 使用Flask-SocketIO配置
+socketio = SocketIO(app, 
+                   async_mode='eventlet',
+                   ping_interval=25,    # 心跳间隔25秒
+                   ping_timeout=120,    # 心跳超时120秒
+                   cors_allowed_origins="*")
 
 def to_jsonable(obj):
     import numpy as _np
@@ -45,65 +54,37 @@ DRY_EYE_MIN_SAMPLES = SAMPLING_RATE * 3
 dry_eye_signal_buffer = []
 last_dry_eye_output = None
 
-ws_clients = set()
 
-
-def safe_ws_send(ws, payload: dict) -> bool:
-    try:
-        ws.send(json.dumps(payload, ensure_ascii=False))
-        return True
-    except Exception:
-        return False
-
-
-@sock.route('/ws')
-def ws_handler(ws):
+@socketio.on('connect')
+def handle_connect():
     print("[WS] Client connected")
-    ws_clients.add(ws)
-
-    safe_ws_send(ws, {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
-    safe_ws_send(ws, {"type": "stats", "data": to_jsonable(data_stats)})
-
+    emit('hello', {"serverTime": datetime.utcnow().isoformat() + "Z"})
+    emit('stats', to_jsonable(data_stats))
     if last_dry_eye_output is not None:
-        safe_ws_send(ws, {"type": "dryEye", "data": to_jsonable(last_dry_eye_output)})
-
-    try:
-        while True:
-            msg = ws.receive()
-            if msg is None:
-                break
-            try:
-                obj = json.loads(msg)
-                if isinstance(obj, dict) and obj.get("type") == "ping":
-                    safe_ws_send(ws, {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
-                    continue
-            except Exception:
-                pass
-    except Exception as e:
-        print("[WS] Exception:", e)
-    finally:
-        ws_clients.discard(ws)
-        print("[WS] Client disconnected")
+        emit('dryEye', to_jsonable(last_dry_eye_output))
 
 
-def broadcast(payload: dict):
-    dead = []
-    for client in list(ws_clients):
-        ok = safe_ws_send(client, payload)
-        if not ok:
-            dead.append(client)
-    for c in dead:
-        ws_clients.discard(c)
-    if ws_clients:
-        print(f"[WS] 已广播到 {len(ws_clients)} 个客户端")
+@socketio.on('disconnect')
+def handle_disconnect():
+    print("[WS] Client disconnected")
 
 
-def broadcast_data(data_point):
-    broadcast({"type": "bluetooth_data", "data": to_jsonable(data_point)})
+@socketio.on('ping')
+def handle_ping(data):
+    emit('pong', {"ts": int(time.time() * 1000)})
 
 
 def broadcast_dry_eye(dry_eye_output: dict):
-    broadcast({"type": "dryEye", "data": to_jsonable(dry_eye_output)})
+    socketio.emit('dryEye', to_jsonable(dry_eye_output))
+    try:
+        client_count = len(socketio.server.manager.rooms.get('/', {}))
+    except Exception:
+        client_count = 'unknown'
+    print(f"[WS] Broadcast dryEye data to {client_count} clients")
+
+
+def broadcast_data(data_point):
+    socketio.emit('bluetooth_data', to_jsonable(data_point))
 
 
 def calculate_stats():
@@ -226,6 +207,9 @@ def receive_bluetooth_data():
                     last_dry_eye_output = dry_eye_output
 
                     print(f"[ALGO] Compute success | riskScore={dry_eye_output.get('dryEyeRiskScore')} | blinkRate={dry_eye_output.get('blinkRate')}")
+                    
+                    # 使用eventlet.sleep释放协程控制权
+                    eventlet.sleep(0.005)
                     broadcast_dry_eye(dry_eye_output)
 
                     dt_ms = (time.time() - t0) * 1000.0
@@ -283,11 +267,11 @@ if __name__ == '__main__':
     PORT = 3000
     print("[服务器] 干眼症后端服务启动中...")
     print(f"   访问地址: http://localhost:{PORT}")
-    print(f"   WebSocket: ws://localhost:{PORT}/ws")
+    print(f"   WebSocket: http://localhost:{PORT}/socket.io")
     print(f"   API (POST 数据): http://localhost:{PORT}/api/bluetooth-data")
     print(f"   API (GET 统计): http://localhost:{PORT}/api/stats")
     print(f"   API (POST 清空): http://localhost:{PORT}/api/clear-buffer")
     print("\n等待蓝牙数据...\n")
 
-    # Flask 自带开发服务器（带 WebSocket 支持）
-    app.run(host='0.0.0.0', port=PORT, debug=True)
+    # 使用eventlet运行
+    socketio.run(app, host='0.0.0.0', port=PORT, debug=True)
