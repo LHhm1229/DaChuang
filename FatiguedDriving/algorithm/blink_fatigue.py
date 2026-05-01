@@ -506,16 +506,16 @@ def assess_fatigue(
     """
     indicators: Dict[str, float] = {}
 
-    # 1) 眨眼频率得分 - 疲劳时眨眼频率明显下降
+    # 1) 眨眼频率得分 - 疲劳时眨眼频率变化
     freq = float(blink_features.get("blink_frequency", 0.0))
     if freq > 0:
-        normal_range = (0.25, 0.45)  # 次/秒 = 15-27次/分钟
+        normal_range = (0.3, 0.6)  # 次/秒 = 18-36次/分钟（更宽的正常范围）
         if freq < normal_range[0]:
-            # 频率越低，得分越高（越疲劳）
-            indicators["blink_frequency_score"] = float(min(100.0, (normal_range[0] - freq) * 400.0))
+            # 频率过低，得分越高（越疲劳）
+            indicators["blink_frequency_score"] = float(min(100.0, (normal_range[0] - freq) * 500.0))
         elif freq > normal_range[1]:
             # 频率过高也可能是疲劳表现
-            indicators["blink_frequency_score"] = float(min(60.0, (freq - normal_range[1]) * 150.0))
+            indicators["blink_frequency_score"] = float(min(80.0, (freq - normal_range[1]) * 200.0))
         else:
             indicators["blink_frequency_score"] = 0.0
     else:
@@ -524,8 +524,8 @@ def assess_fatigue(
     # 2) 平均眨眼持续时间得分 - 疲劳时眨眼持续时间变长
     avg_dur = float(blink_features.get("avg_blink_duration", 0.0))
     if avg_dur > 0:
-        normal_duration = 0.15  # 正常眨眼持续时间约150ms
-        indicators["blink_duration_score"] = float(min(100.0, max(0.0, (avg_dur - normal_duration) * 300.0)))
+        normal_duration = 0.12  # 正常眨眼持续时间约120ms（更严格的阈值）
+        indicators["blink_duration_score"] = float(min(100.0, max(0.0, (avg_dur - normal_duration) * 500.0)))
     else:
         indicators["blink_duration_score"] = 0.0
 
@@ -555,24 +555,26 @@ def assess_fatigue(
     # 5) 眼闭合比例得分 - 最直接的疲劳指标
     eye_closure_ratio = float(blink_features.get("eye_closure_ratio", 0.0))
     # 正常眼闭合比例约2-5%，超过5%开始计分，更敏感的计分
-    if eye_closure_ratio >= 30:
+    if eye_closure_ratio >= 25:
         indicators["eye_closure_score"] = 100.0
-    elif eye_closure_ratio >= 20:
-        indicators["eye_closure_score"] = 80.0
-    elif eye_closure_ratio >= 10:
-        indicators["eye_closure_score"] = 50.0
-    elif eye_closure_ratio >= 5:
-        indicators["eye_closure_score"] = float((eye_closure_ratio - 5.0) * 10.0)
+    elif eye_closure_ratio >= 18:
+        indicators["eye_closure_score"] = 85.0
+    elif eye_closure_ratio >= 12:
+        indicators["eye_closure_score"] = 65.0
+    elif eye_closure_ratio >= 8:
+        indicators["eye_closure_score"] = 45.0
+    elif eye_closure_ratio >= 4:
+        indicators["eye_closure_score"] = float((eye_closure_ratio - 4.0) * 15.0)
     else:
         indicators["eye_closure_score"] = 0.0
 
     # 6) 加权融合
     weights = {
-        "blink_frequency_score": 0.25,    # 提高权重
-        "blink_duration_score": 0.20,     # 提高权重
+        "blink_frequency_score": 0.20,
+        "blink_duration_score": 0.25,     # 提高眨眼持续时间权重
         "long_blink_ratio_score": 0.15,
         "incomplete_blink_ratio_score": 0.10,
-        "eye_closure_score": 0.30,        # 保持主要权重
+        "eye_closure_score": 0.35,        # 提高眼闭合比例权重
     }
 
     fatigue_score = 0.0

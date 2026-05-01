@@ -6,9 +6,9 @@ import urllib.error
 from datetime import datetime
 import math
 
-# 配置
-API_URL = "http://127.0.0.1:3001/api/bluetooth-data"
-ROOT_URL = "http://127.0.0.1:3001/"
+# 配置 - 疲劳驾驶后端端口
+API_URL = "http://127.0.0.1:3002/api/bluetooth-data"
+ROOT_URL = "http://127.0.0.1:3002/"
 HEADERS = {'Content-Type': 'application/json'}
 
 def check_server():
@@ -48,32 +48,94 @@ def generate_signal_chunk(duration_sec, sampling_rate, state="normal"):
     num_samples = int(duration_sec * sampling_rate)
     values = []
     
+    # 状态追踪
+    in_blink = False
+    blink_duration = 0
+    in_long_close = False
+    long_close_duration = 0
+    in_slow_blink = False
+    slow_blink_duration = 0
+    
+    # 眨眼持续时间（样本数）
+    normal_blink_length = int(0.1 * sampling_rate)     # 100ms
+    slow_blink_length = int(0.4 * sampling_rate)       # 400ms 慢速眨眼
+    long_close_length = int(2.0 * sampling_rate)       # 2秒长闭眼
+    
     for i in range(num_samples):
-        # 基础噪声
-        noise = random.uniform(-0.05, 0.05)
+        noise = random.uniform(-0.02, 0.02)
         
         if state == "normal":
-            # 正常状态：偶尔眨眼（低频，短时）
-            if random.random() > 0.99: 
-                val = 0.8 + noise # 眨眼峰值
+            # 正常状态：清醒，低频眨眼（约12次/分钟），眨眼时间短
+            # 眨眼概率约 0.002 每样本 ≈ 12次/分钟
+            if not in_blink and random.random() > 0.998:
+                in_blink = True
+                blink_duration = 0
+            
+            if in_blink:
+                blink_duration += 1
+                if blink_duration <= normal_blink_length:
+                    val = 0.85 + noise  # 眨眼峰值
+                else:
+                    in_blink = False
+                    val = 0.05 + noise  # 低基线表示睁眼
             else:
-                val = 0.1 + noise # 睁眼基线
+                val = 0.05 + noise  # 稳定低基线
                 
         elif state == "fatigue":
-            # 疲劳状态：频繁眨眼，且有长闭眼
-            if random.random() > 0.90: 
-                val = 0.9 + noise # 频繁眨眼/闭眼
+            # 疲劳状态：符合算法预期的疲劳特征
+            # 算法期望：疲劳时眨眼频率降低，但闭眼时间显著增加
+            # 1. 长时间闭眼状态（最关键的疲劳指标）
+            if in_long_close:
+                long_close_duration += 1
+                if long_close_duration <= long_close_length:
+                    val = 0.98 + noise  # 非常高的值表示深度闭眼
+                else:
+                    in_long_close = False
+                    long_close_duration = 0
+                    val = 0.15 + noise
+            # 2. 慢速长眨眼（很少，但持续时间很长）
+            elif in_slow_blink:
+                slow_blink_duration += 1
+                if slow_blink_duration <= slow_blink_length:
+                    val = 0.95 + noise  # 眨眼峰值更高
+                else:
+                    in_slow_blink = False
+                    slow_blink_duration = 0
+                    # 长眨眼后极可能进入长时间闭眼
+                    if random.random() > 0.1:
+                        in_long_close = True
+                        long_close_duration = 0
+                    val = 0.15 + noise
+            # 3. 触发新的长眨眼（低频，但每次持续时间长）
+            elif not in_blink and random.random() > 0.995:
+                in_slow_blink = True
+                slow_blink_duration = 0
+                val = 0.95 + noise
+            # 4. 基线状态（大部分时间是半闭合或闭眼状态）
             else:
-                val = 0.2 + noise # 即使睁眼也可能不完全
-                
+                # 极高概率进入长时间闭眼（每0.2秒约50%概率）
+                if random.random() > 0.98:
+                    in_long_close = True
+                    long_close_duration = 0
+                    val = 0.98 + noise
+                else:
+                    # 基线非常高，表示眼皮沉重，接近半闭合状态
+                    val = 0.55 + noise  # 高基线表示严重眼皮沉重
+                    
         elif state == "poor_signal":
-            # 信号差：大幅随机波动
-            val = random.uniform(0, 1.0)
+            # 信号不稳定：大幅随机波动，质量差
+            # 使用更大的噪声和突然跳变
+            if random.random() > 0.92:
+                # 频繁大幅跳变
+                val = random.uniform(0, 1.0)
+            else:
+                # 持续的大幅波动，无规律
+                val = random.uniform(0, 1.0)
             
         else:
             val = 0.0
             
-        values.append(val)
+        values.append(max(0.0, min(1.0, val)))  # 限制在[0,1]范围
     
     return values
 
