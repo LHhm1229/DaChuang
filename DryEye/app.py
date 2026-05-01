@@ -94,6 +94,8 @@ def broadcast(payload: dict):
             dead.append(client)
     for c in dead:
         ws_clients.discard(c)
+    if ws_clients:
+        print(f"[WS] 已广播到 {len(ws_clients)} 个客户端")
 
 
 def broadcast_data(data_point):
@@ -180,6 +182,7 @@ def receive_bluetooth_data():
         time_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[DATA] [{time_str}] Bluetooth data received #{data_stats['totalReceived']}")
         print(f"   Quality: {data_point['signalQuality']}% | Buffer: {len(bluetooth_data)} | Received: {data_point['receivedAt']}")
+        print(f"   RawData length: {len(data_point['rawData'])}")
 
         if data_stats["totalReceived"] % 10 == 0:
             stats = calculate_stats()
@@ -196,13 +199,20 @@ def receive_bluetooth_data():
                 dry_eye_signal_buffer.extend(chunk)
 
             max_len = int(DRY_EYE_WINDOW_SECONDS * SAMPLING_RATE)
+            
             if len(dry_eye_signal_buffer) > max_len:
+                print(f"[BUFFER] Overflow warning: {len(dry_eye_signal_buffer)} -> {max_len}")
                 dry_eye_signal_buffer = dry_eye_signal_buffer[-max_len:]
 
+            print(f"[BUFFER] Signal buffer: {len(dry_eye_signal_buffer)}/{max_len} samples, can_compute={len(dry_eye_signal_buffer) >= DRY_EYE_MIN_SAMPLES}")
+
             if len(dry_eye_signal_buffer) >= DRY_EYE_MIN_SAMPLES:
+                print(f"[ALGO] Ready to compute dry eye risk | Buffer length: {len(dry_eye_signal_buffer)}")
+                
                 raw_np = np.asarray(dry_eye_signal_buffer, dtype=float)
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
+                    print(f"[ALGO] Found {len(raw_np) - np.sum(finite_mask)} invalid samples, filtered")
                     raw_np = raw_np[finite_mask]
 
                 if raw_np.size >= DRY_EYE_MIN_SAMPLES:
@@ -215,16 +225,25 @@ def receive_bluetooth_data():
                     dry_eye_output = to_jsonable(dry_eye_output)
                     last_dry_eye_output = dry_eye_output
 
+                    print(f"[ALGO] Compute success | riskScore={dry_eye_output.get('dryEyeRiskScore')} | blinkRate={dry_eye_output.get('blinkRate')}")
                     broadcast_dry_eye(dry_eye_output)
 
                     dt_ms = (time.time() - t0) * 1000.0
                     print(
                         f"[ALGO] DRY EYE computed | n={raw_np.size} | cost={dt_ms:.1f}ms "
                         f"| riskScore={dry_eye_output.get('dryEyeRiskScore')} "
-                        f"| blinkRate={dry_eye_output.get('blinkRate')}"
+                        f"| blinkRate={dry_eye_output.get('blinkRate')} "
+                        f"| incompleteRatio={dry_eye_output.get('incompleteBlinkRatio')} "
+                        f"| longBlinkRatio={dry_eye_output.get('longBlinkRatio')}"
                     )
+                else:
+                    print(f"[ALGO] Not enough valid samples: {raw_np.size}/{DRY_EYE_MIN_SAMPLES}")
+            else:
+                print(f"[ALGO] Waiting for more samples: {len(dry_eye_signal_buffer)}/{DRY_EYE_MIN_SAMPLES}")
         except Exception as fe:
-            print("[ALGO] Dry eye computation failed:", fe)
+            import traceback
+            print(f"[ALGO] Computation failed: {fe}")
+            print(f"[ALGO] Stack trace:\n{traceback.format_exc()}")
 
         broadcast_data(data_point)
 

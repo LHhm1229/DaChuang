@@ -308,7 +308,7 @@ def run_sleep_quality_pipeline(
             "rem": round(rem_epochs / n_epochs * 100, 1) if n_epochs > 0 else 0,
         }
     }
-    # 添加最新的特征输出
+    
     if epoch_features_list:
         latest_feats = epoch_features_list[-1]
         result.update({
@@ -319,4 +319,7 @@ def run_sleep_quality_pipeline(
             "rem_sem_ratio": round(latest_feats.get("rem_sem_ratio", 0), 2),
             "signal_std": round(latest_feats.get("signal_std", 0), 4)
         })
+    
+    print(f"[METRICS] 睡眠指标 | score={result['qualityScore']} | stage={result['currentStageName']} | efficiency={result['sleepEfficiency']}% | rem_density={result.get('rem_density', 0)} | sem_count={result.get('sem_count', 0)}")
+    
     return result

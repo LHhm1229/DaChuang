@@ -1,8 +1,12 @@
-import React, { useState, useEffect, memo } from 'react';
+/**
+ * UnifiedBentoDashboard.tsx - 统一Bento风格仪表盘
+ * 数据与UI完全解耦 - 接收外部传入的实时数据
+ */
+
+import React, { useState, useEffect, useCallback, memo } from 'react';
 import { GlassCard, GlassCardContainer, GlassProgress, GlassBadge } from './ui';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { bluetoothService } from '../services/bluetoothService';
-import { useDataService } from '../services/dataService';
+import { UnifiedMetricData, SecondaryMetric, ChartDataPoint } from '../services/dataMapper';
 
 // 性能优化：使用React.memo包装玻璃态卡片组件
 const MemoizedGlassCard = memo(GlassCard);
@@ -12,15 +16,51 @@ const MemoizedGlassBadge = memo(GlassBadge);
 
 interface UnifiedBentoDashboardProps {
   module: 'dry-eye' | 'sleep' | 'fatigue';
+  data: UnifiedMetricData | null;  // 接收外部传入的实时数据
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
 }
 
-// 模拟数据
-const generateMockData = (module: 'dry-eye' | 'sleep' | 'fatigue', count: number = 24) => {
-  const data = [];
+// 模块配置
+const moduleConfigs = {
+  'dry-eye': {
+    title: '干眼症监测',
+    mainMetricLabel: '干眼风险',
+    mainMetricUnit: '%',
+    chartTitle: '眨眼频率与干眼风险趋势',
+    chartSeries: [
+      { key: 'blinkRate', name: '眨眼频率', color: '#16C79E' },
+      { key: 'dryEyeRisk', name: '干眼风险', color: '#E86830' }
+    ]
+  },
+  'sleep': {
+    title: '睡眠质量检测',
+    mainMetricLabel: '睡眠质量',
+    mainMetricUnit: '分',
+    chartTitle: '睡眠质量与REM密度趋势',
+    chartSeries: [
+      { key: 'sleepScore', name: '睡眠质量', color: '#4F1091' },
+      { key: 'remDensity', name: 'REM密度', color: '#8A2BE2' }
+    ]
+  },
+  'fatigue': {
+    title: '疲劳驾驶预警',
+    mainMetricLabel: '疲劳评分',
+    mainMetricUnit: '分',
+    chartTitle: '疲劳评分与眨眼持续时间趋势',
+    chartSeries: [
+      { key: 'fatigueScore', name: '疲劳评分', color: '#E86830' },
+      { key: 'blinkDuration', name: '眨眼持续时间', color: '#FFA500' }
+    ]
+  }
+};
+
+// 生成模拟数据（当无实时数据时使用）
+const generateMockData = (module: 'dry-eye' | 'sleep' | 'fatigue', count: number = 24): ChartDataPoint[] => {
+  const data: ChartDataPoint[] = [];
   for (let i = 0; i < count; i++) {
     const timestamp = new Date();
-    timestamp.setHours(timestamp.getHours() - (count - i));
-    
+    timestamp.setMinutes(timestamp.getMinutes() - (count - i));
+
     if (module === 'dry-eye') {
       data.push({
         time: timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
@@ -33,7 +73,7 @@ const generateMockData = (module: 'dry-eye' | 'sleep' | 'fatigue', count: number
         sleepScore: Math.random() * 30 + 70,
         remDensity: Math.random() * 0.5
       });
-    } else if (module === 'fatigue') {
+    } else {
       data.push({
         time: timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
         fatigueScore: Math.random() * 40 + 30,
@@ -44,218 +84,133 @@ const generateMockData = (module: 'dry-eye' | 'sleep' | 'fatigue', count: number
   return data;
 };
 
-// 模块配置
-const moduleConfigs = {
-  'dry-eye': {
-    title: '干眼症监测',
-    mainMetric: 'dryEyeRisk',
-    mainMetricLabel: '干眼风险',
-    mainMetricUnit: '%',
-    secondaryMetrics: [
-      { key: 'blinkRate', label: '眨眼频率', unit: '次/分钟', value: 15.5 },
-      { key: 'avgBlinkDuration', label: '平均眨眼持续时间', unit: 'ms', value: 250 },
-      { key: 'eyeClosureRatio', label: '眼睛闭合比例', unit: '%', value: 3.5 }
-    ],
-    chartData: generateMockData('dry-eye'),
-    chartConfig: {
-      yAxis: '数值',
-      series: [
-        { key: 'blinkRate', name: '眨眼频率', color: '#16C79E' },
-        { key: 'dryEyeRisk', name: '干眼风险', color: '#E86830' }
-      ]
-    }
-  },
-  'sleep': {
-    title: '睡眠质量检测',
-    mainMetric: 'sleepScore',
-    mainMetricLabel: '睡眠质量',
-    mainMetricUnit: '分',
-    secondaryMetrics: [
-      { key: 'currentStage', label: '当前睡眠阶段', unit: '', value: '浅睡N2' },
-      { key: 'remDensity', label: 'REM密度', unit: '', value: 0.2 },
-      { key: 'sleepEfficiency', label: '睡眠效率', unit: '%', value: 90.0 }
-    ],
-    chartData: generateMockData('sleep'),
-    chartConfig: {
-      yAxis: '数值',
-      series: [
-        { key: 'sleepScore', name: '睡眠质量', color: '#4F1091' },
-        { key: 'remDensity', name: 'REM密度', color: '#8A2BE2' }
-      ]
-    }
-  },
-  'fatigue': {
-    title: '疲劳驾驶预警',
-    mainMetric: 'fatigueScore',
-    mainMetricLabel: '疲劳评分',
-    mainMetricUnit: '分',
-    secondaryMetrics: [
-      { key: 'blinkRate', label: '眨眼频率', unit: '次/分钟', value: 12.0 },
-      { key: 'avgBlinkDuration', label: '平均眨眼持续时间', unit: 'ms', value: 300 },
-      { key: 'alertLevel', label: '预警等级', unit: '', value: '警告' }
-    ],
-    chartData: generateMockData('fatigue'),
-    chartConfig: {
-      yAxis: '数值',
-      series: [
-        { key: 'fatigueScore', name: '疲劳评分', color: '#E86830' },
-        { key: 'blinkDuration', name: '眨眼持续时间', color: '#FFA500' }
-      ]
-    }
+// 主题颜色配置
+const getThemeColors = (module: 'dry-eye' | 'sleep' | 'fatigue') => {
+  if (module === 'dry-eye') {
+    return {
+      primary: '#16C79E',
+      secondary: '#0F8C6E',
+      bgGradient: 'from-emerald-950 to-teal-950',
+      cardBg: 'bg-emerald-900/40',
+      cardBorder: 'border-emerald-500/30',
+      badgeColor: '#16C79E'
+    };
+  } else if (module === 'sleep') {
+    return {
+      primary: '#4F1091',
+      secondary: '#8A2BE2',
+      bgGradient: 'from-purple-950 to-indigo-950',
+      cardBg: 'bg-purple-900/40',
+      cardBorder: 'border-purple-500/30',
+      badgeColor: '#4F1091'
+    };
+  } else {
+    return {
+      primary: '#E86830',
+      secondary: '#FFA500',
+      bgGradient: 'from-orange-950 to-amber-950',
+      cardBg: 'bg-orange-900/40',
+      cardBorder: 'border-orange-500/30',
+      badgeColor: '#E86830'
+    };
   }
 };
 
-export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({ module }) => {
-  const [chartData, setChartData] = useState(moduleConfigs[module].chartData);
+// 获取主值颜色
+const getMainValueColor = (value: number, module: 'dry-eye' | 'sleep' | 'fatigue'): string => {
+  if (module === 'dry-eye') {
+    if (value < 30) return 'text-emerald-400';
+    if (value < 60) return 'text-yellow-400';
+    return 'text-red-400';
+  } else if (module === 'sleep') {
+    if (value > 80) return 'text-emerald-400';
+    if (value > 60) return 'text-yellow-400';
+    return 'text-red-400';
+  } else {
+    if (value < 40) return 'text-emerald-400';
+    if (value < 70) return 'text-yellow-400';
+    return 'text-red-400';
+  }
+};
+
+export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
+  module,
+  data,
+  connectionStatus
+}) => {
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [mainValue, setMainValue] = useState<number | string>(0);
-  const [bluetoothConnected, setBluetoothConnected] = useState(false);
+  const [secondaryMetrics, setSecondaryMetrics] = useState<SecondaryMetric[]>([]);
   const [signalQuality, setSignalQuality] = useState(85);
+
   const config = moduleConfigs[module];
-  
-  // 使用数据服务获取后端数据
-  const { data: backendData } = useDataService(module);
+  const theme = getThemeColors(module);
 
+  // 初始化模拟数据
   useEffect(() => {
-    setBluetoothConnected(bluetoothService.isDeviceConnected());
-    
-    const handleDataReceived = (data: any) => {
-      setBluetoothConnected(true);
-      if (data.signalQuality !== undefined) {
-        setSignalQuality(data.signalQuality);
-      }
-    };
-
-    const handleError = () => {
-      setBluetoothConnected(false);
-    };
-
-    bluetoothService.addListener(handleDataReceived);
-    bluetoothService.addErrorListener(handleError);
-
-    return () => {
-      bluetoothService.removeListener(handleDataReceived);
-      bluetoothService.removeErrorListener(handleError);
-    };
-  }, []);
-
-  // 处理后端数据更新
-  useEffect(() => {
-    if (backendData) {
-      console.log('后端数据更新:', backendData);
-      
-      if (module === 'dry-eye') {
-        if (backendData.dryEyeRiskScore !== undefined) {
-          setMainValue(Math.round(backendData.dryEyeRiskScore));
-        }
-        if (backendData.blinkRate !== undefined) {
-          config.secondaryMetrics[0].value = backendData.blinkRate;
-        }
-        if (backendData.avgBlinkDuration !== undefined) {
-          config.secondaryMetrics[1].value = backendData.avgBlinkDuration;
-        }
-        if (backendData.eyeClosureRatio !== undefined) {
-          config.secondaryMetrics[2].value = backendData.eyeClosureRatio;
-        }
-      } else if (module === 'sleep') {
-        if (backendData.qualityScore !== undefined) {
-          setMainValue(Math.round(backendData.qualityScore));
-        }
-        if (backendData.currentStageName !== undefined) {
-          config.secondaryMetrics[0].value = backendData.currentStageName;
-        }
-        if (backendData.remDensity !== undefined) {
-          config.secondaryMetrics[1].value = backendData.remDensity;
-        }
-        if (backendData.sleepEfficiency !== undefined) {
-          config.secondaryMetrics[2].value = backendData.sleepEfficiency;
-        }
-      } else if (module === 'fatigue') {
-        if (backendData.fatigueScore !== undefined) {
-          setMainValue(Math.round(backendData.fatigueScore));
-        }
-        if (backendData.blinkRate !== undefined) {
-          config.secondaryMetrics[0].value = backendData.blinkRate;
-        }
-        if (backendData.avgBlinkDuration !== undefined) {
-          config.secondaryMetrics[1].value = backendData.avgBlinkDuration;
-        }
-        if (backendData.alertLevel !== undefined) {
-          config.secondaryMetrics[2].value = backendData.alertLevel;
-        }
-      }
-    }
-  }, [backendData, module]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
+    if (chartData.length === 0) {
       setChartData(generateMockData(module));
-      
-      // 如果没有后端数据，使用模拟数据更新主值
-      if (!backendData) {
+    }
+  }, [module, chartData.length]);
+
+  // 处理实时数据更新
+  useEffect(() => {
+    if (data) {
+      // 更新主值
+      setMainValue(data.mainValue);
+
+      // 更新辅助指标
+      setSecondaryMetrics(data.secondaryMetrics);
+
+      // 更新信号质量
+      if (data.status.signalQuality) {
+        setSignalQuality(data.status.signalQuality);
+      }
+
+      // 更新图表数据（追加新数据点）
+      setChartData(prev => {
+        const newPoint: ChartDataPoint = {
+          time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+          ...(module === 'dry-eye' && {
+            blinkRate: data.secondaryMetrics[0]?.value as number || 0,
+            dryEyeRisk: data.mainValue as number || 0
+          }),
+          ...(module === 'sleep' && {
+            sleepScore: data.mainValue as number || 0,
+            remDensity: parseFloat(data.secondaryMetrics[1]?.value as string) || 0
+          }),
+          ...(module === 'fatigue' && {
+            fatigueScore: data.mainValue as number || 0,
+            blinkDuration: data.secondaryMetrics[1]?.value as number || 0
+          })
+        };
+
+        const updated = [...prev, newPoint];
+        // 保持最近24个数据点
+        return updated.slice(-24);
+      });
+    }
+  }, [data, module]);
+
+  // 定时更新模拟数据（当无实时数据时）
+  useEffect(() => {
+    if (!data) {
+      const interval = setInterval(() => {
+        setChartData(generateMockData(module));
         if (module === 'dry-eye') {
           setMainValue(Math.round(Math.random() * 50 + 20));
         } else if (module === 'sleep') {
           setMainValue(Math.round(Math.random() * 30 + 70));
-        } else if (module === 'fatigue') {
+        } else {
           setMainValue(Math.round(Math.random() * 40 + 30));
         }
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [module, backendData]);
-
-  const getThemeColors = () => {
-    if (module === 'dry-eye') {
-      return {
-        primary: '#16C79E',
-        secondary: '#0F8C6E',
-        bgGradient: 'from-emerald-950 to-teal-950',
-        cardBg: 'bg-emerald-900/40',
-        cardBorder: 'border-emerald-500/30',
-        badgeColor: '#16C79E'
-      };
-    } else if (module === 'sleep') {
-      return {
-        primary: '#4F1091',
-        secondary: '#8A2BE2',
-        bgGradient: 'from-purple-950 to-indigo-950',
-        cardBg: 'bg-purple-900/40',
-        cardBorder: 'border-purple-500/30',
-        badgeColor: '#4F1091'
-      };
-    } else {
-      return {
-        primary: '#E86830',
-        secondary: '#FFA500',
-        bgGradient: 'from-orange-950 to-amber-950',
-        cardBg: 'bg-orange-900/40',
-        cardBorder: 'border-orange-500/30',
-        badgeColor: '#E86830'
-      };
+      }, 5000);
+      return () => clearInterval(interval);
     }
-  };
+  }, [module, data]);
 
-  const theme = getThemeColors();
-
-  const getMainValueColor = (value: number | string): string => {
-    if (typeof value === 'string') return `text-${module === 'dry-eye' ? 'emerald' : module === 'sleep' ? 'purple' : 'orange'}-400`;
-    
-    if (module === 'dry-eye') {
-      if (value < 30) return 'text-emerald-400';
-      if (value < 60) return 'text-yellow-400';
-      return 'text-red-400';
-    } else if (module === 'sleep') {
-      if (value > 80) return 'text-emerald-400';
-      if (value > 60) return 'text-yellow-400';
-      return 'text-red-400';
-    } else if (module === 'fatigue') {
-      if (value < 40) return 'text-emerald-400';
-      if (value < 70) return 'text-yellow-400';
-      return 'text-red-400';
-    }
-    return 'text-white';
-  };
+  // 蓝牙连接状态
+  const bluetoothConnected = connectionStatus === 'connected';
 
   return (
     <div className={`bento-grid min-h-screen bg-gradient-to-br ${theme.bgGradient} p-4 md:p-8`}>
@@ -263,49 +218,64 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({ mo
       <MemoizedGlassCardContainer layout="large">
         <MemoizedGlassCard variant="large" className={`${theme.cardBg} ${theme.cardBorder} border flex flex-col justify-center items-center`}>
           <h2 className="text-2xl font-bold mb-4 text-white">{config.mainMetricLabel}</h2>
-          <div className={`text-6xl font-bold mb-4 ${getMainValueColor(mainValue)}`}>
+          <div className={`text-6xl font-bold mb-4 ${getMainValueColor(mainValue as number, module)}`}>
             {mainValue}{config.mainMetricUnit}
           </div>
-          <MemoizedGlassBadge className={`text-lg px-6 py-2 text-white bg-[${theme.badgeColor}]`}>
-            {module === 'dry-eye' ? '实时监测中' : 
-             module === 'sleep' ? '睡眠分析中' : '驾驶监测中'}
+          <MemoizedGlassBadge className={`text-lg px-6 py-2 text-white`} style={{ backgroundColor: theme.badgeColor }}>
+            {connectionStatus === 'connected' ? (
+              module === 'dry-eye' ? '实时监测中' :
+              module === 'sleep' ? '睡眠分析中' : '驾驶监测中'
+            ) : (
+              '等待连接...'
+            )}
           </MemoizedGlassBadge>
         </MemoizedGlassCard>
       </MemoizedGlassCardContainer>
 
       {/* 辅助指标卡片 */}
-      {config.secondaryMetrics.map((metric) => (
-        <MemoizedGlassCardContainer key={metric.key}>
-          <MemoizedGlassCard className={`${theme.cardBg} ${theme.cardBorder} border`}>
-            <h3 className="text-sm opacity-70 mb-2 text-white/70">{metric.label}</h3>
-            <div className="text-2xl font-bold mb-2 text-white">
-              {metric.value}{metric.unit}
-            </div>
-            {typeof metric.value === 'number' && (
-              <MemoizedGlassProgress
-                value={metric.value as number}
-                max={module === 'dry-eye' ? 100 : module === 'sleep' ? 100 : 100}
-                className={`mt-2`}
-                style={{ backgroundColor: theme.primary }}
-              />
-            )}
-          </MemoizedGlassCard>
-        </MemoizedGlassCardContainer>
-      ))}
+      {secondaryMetrics.length > 0 ? (
+        secondaryMetrics.map((metric, index) => (
+          <MemoizedGlassCardContainer key={metric.key || index}>
+            <MemoizedGlassCard className={`${theme.cardBg} ${theme.cardBorder} border`}>
+              <h3 className="text-sm opacity-70 mb-2 text-white/70">{metric.label}</h3>
+              <div className="text-2xl font-bold mb-2 text-white">
+                {metric.value}{metric.unit}
+              </div>
+              {typeof metric.value === 'number' && metric.progress !== undefined && (
+                <MemoizedGlassProgress
+                  value={metric.progress}
+                  max={100}
+                  className="mt-2"
+                  style={{ backgroundColor: theme.primary }}
+                />
+              )}
+            </MemoizedGlassCard>
+          </MemoizedGlassCardContainer>
+        ))
+      ) : (
+        // 默认辅助指标（无数据时显示）
+        [0, 1, 2].map((i) => (
+          <MemoizedGlassCardContainer key={i}>
+            <MemoizedGlassCard className={`${theme.cardBg} ${theme.cardBorder} border`}>
+              <h3 className="text-sm opacity-70 mb-2 text-white/70">等待数据...</h3>
+              <div className="text-2xl font-bold mb-2 text-white">--</div>
+            </MemoizedGlassCard>
+          </MemoizedGlassCardContainer>
+        ))
+      )}
 
       {/* 图表卡片 */}
       <MemoizedGlassCardContainer layout="wide">
         <MemoizedGlassCard variant="large" className={`${theme.cardBg} ${theme.cardBorder} border`}>
-          <h3 className="text-lg font-bold mb-4 text-white">{module === 'dry-eye' ? '眨眼频率与干眼风险趋势' : 
-             module === 'sleep' ? '睡眠质量与REM密度趋势' : '疲劳评分与眨眼持续时间趋势'}</h3>
+          <h3 className="text-lg font-bold mb-4 text-white">{config.chartTitle}</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="time" stroke="rgba(255,255,255,0.5)" />
                 <YAxis stroke="rgba(255,255,255,0.5)" />
-                <Tooltip 
-                  contentStyle={{ 
+                <Tooltip
+                  contentStyle={{
                     backgroundColor: 'rgba(0,0,0,0.8)',
                     backdropFilter: 'blur(12px)',
                     border: '1px solid rgba(255,255,255,0.1)',
@@ -313,15 +283,15 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({ mo
                     color: '#fff'
                   }}
                 />
-                {config.chartConfig.series.map((series) => (
-                  <Line 
-                    key={series.key} 
-                    type="monotone" 
-                    dataKey={series.key} 
-                    name={series.name} 
-                    stroke={series.color} 
-                    strokeWidth={2} 
-                    dot={{ r: 4 }} 
+                {config.chartSeries.map((series) => (
+                  <Line
+                    key={series.key}
+                    type="monotone"
+                    dataKey={series.key}
+                    name={series.name}
+                    stroke={series.color}
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
                     activeDot={{ r: 6 }}
                   />
                 ))}
@@ -337,18 +307,24 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({ mo
           <h3 className="text-sm opacity-70 mb-3 text-white/70">设备状态</h3>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-white/80">蓝牙连接</span>
-              <MemoizedGlassBadge 
-                className={`text-white ${bluetoothConnected ? 'bg-green-500' : 'bg-gray-500'}`}
+              <span className="text-white/80">后端连接</span>
+              <MemoizedGlassBadge
+                className={`text-white ${
+                  connectionStatus === 'connected' ? 'bg-green-500' :
+                  connectionStatus === 'connecting' ? 'bg-yellow-500' :
+                  connectionStatus === 'error' ? 'bg-red-500' : 'bg-gray-500'
+                }`}
               >
-                {bluetoothConnected ? '已连接' : '未连接'}
+                {connectionStatus === 'connected' ? '已连接' :
+                 connectionStatus === 'connecting' ? '连接中...' :
+                 connectionStatus === 'error' ? '连接错误' : '未连接'}
               </MemoizedGlassBadge>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-white/80">电池电量</span>
               <div className="flex items-center gap-2">
                 <div className="w-24 h-2 bg-white/20 rounded-full overflow-hidden">
-                  <div 
+                  <div
                     className="h-full rounded-full transition-all"
                     style={{ width: '85%', backgroundColor: '#22c55e' }}
                   ></div>
@@ -358,7 +334,7 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({ mo
             </div>
             <div className="flex items-center justify-between">
               <span className="text-white/80">信号质量</span>
-              <MemoizedGlassBadge 
+              <MemoizedGlassBadge
                 className={`text-white ${signalQuality > 70 ? 'bg-green-500' : signalQuality > 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
               >
                 {signalQuality > 70 ? '良好' : signalQuality > 40 ? '一般' : '较差'}
@@ -375,15 +351,15 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({ mo
           <div className="space-y-2 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-white/80">软件版本</span>
-              <span className="text-white">v1.0.0</span>
+              <span className="text-white">v2.0.0</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-white/80">数据更新</span>
-              <span className="text-white">实时</span>
+              <span className="text-white">{connectionStatus === 'connected' ? '实时' : '离线'}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-white/80">监测时长</span>
-              <span className="text-white">01:23:45</span>
+              <span className="text-white/80">当前模块</span>
+              <span className="text-white">{config.title}</span>
             </div>
           </div>
         </MemoizedGlassCard>

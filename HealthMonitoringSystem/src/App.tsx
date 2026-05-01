@@ -1,10 +1,52 @@
-import { useState, useEffect } from 'react';
+/**
+ * App.tsx - 健康监测系统主入口
+ * 基于统一WebSocket通信层 + 数据映射层
+ */
+
+import { useState, useEffect, useCallback } from 'react';
 import { Gateway } from './components/Gateway';
 import { UnifiedBentoDashboard } from './components/UnifiedBentoDashboard';
 import { BluetoothControl } from './components/BluetoothControl';
 import { GlassCard } from './components/ui/GlassCard';
 import { Eye, Moon, Car, Home, Settings, HelpCircle, Bluetooth } from 'lucide-react';
-import { BluetoothSensorData } from './services/bluetoothService';
+import { useDynamicWebSocket, ModuleType } from './hooks/useDynamicWebSocket';
+import { mapModuleData, UnifiedMetricData } from './services/dataMapper';
+
+// =========================
+// 模块配置
+// =========================
+const MODULE_CONFIG = {
+  'dry-eye': {
+    title: '干眼症监测',
+    icon: Eye,
+    color: 'primary-dryeye',
+    port: 3000,
+    wsType: 'dryEye'
+  },
+  'sleep': {
+    title: '睡眠质量检测',
+    icon: Moon,
+    color: 'primary-sleep',
+    port: 3001,
+    wsType: 'sleepQuality'
+  },
+  'fatigue': {
+    title: '疲劳驾驶预警',
+    icon: Car,
+    color: 'primary-fatigue',
+    port: 3002,
+    wsType: 'fatigue'
+  }
+};
+
+// =========================
+// 端口映射
+// =========================
+const MODULE_PORT_MAP: Record<ModuleType, number> = {
+  'dry-eye': 3000,
+  'sleep': 3001,
+  'fatigue': 3002
+};
 
 interface AppState {
   currentModule: 'gateway' | 'dry-eye' | 'sleep' | 'fatigue';
@@ -21,7 +63,82 @@ export default function App() {
     isHelpModalOpen: false
   });
 
-  // 切换主题
+  // 当前模块数据
+  const [moduleData, setModuleData] = useState<UnifiedMetricData | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+
+  // 当前模块（用于WebSocket）
+  const currentModuleType: ModuleType = state.currentModule === 'gateway' ? 'fatigue' : state.currentModule as ModuleType;
+
+  // WebSocket消息处理
+  const handleMessage = useCallback((msg: any) => {
+    if (!msg || !msg.type) {
+      console.log('[App] 收到无效消息:', msg);
+      return;
+    }
+
+    const moduleConfig = MODULE_CONFIG[currentModuleType];
+    if (!moduleConfig) {
+      console.log('[App] 未找到模块配置:', currentModuleType);
+      return;
+    }
+
+    console.log(`[App] 收到消息 | 模块: ${currentModuleType} | 消息类型: ${msg.type} | 期望类型: ${moduleConfig.wsType}`);
+
+    // 处理对应模块的数据
+    if (msg.type === moduleConfig.wsType || msg.type === 'result') {
+      console.log(`[App] 处理数据 | type=${msg.type} | data keys:`, msg.data ? Object.keys(msg.data) : '无数据');
+      const mappedData = mapModuleData(currentModuleType, msg.data);
+      if (mappedData) {
+        console.log(`[App] 映射后数据 | mainValue=${mappedData.mainValue} | status=${mappedData.status.connected}`);
+        setModuleData(mappedData);
+      } else {
+        console.log('[App] 数据映射返回null');
+      }
+    } else {
+      console.log(`[App] 消息类型不匹配 | 收到: ${msg.type} | 期望: ${moduleConfig.wsType}`);
+    }
+  }, [currentModuleType]);
+
+  // 连接状态处理
+  const handleConnect = useCallback(() => {
+    setConnectionStatus('connected');
+    console.log(`[App] ${currentModuleType} 模块已连接`);
+  }, [currentModuleType]);
+
+  const handleDisconnect = useCallback(() => {
+    setConnectionStatus('disconnected');
+    console.log(`[App] ${currentModuleType} 模块已断开`);
+  }, [currentModuleType]);
+
+  const handleError = useCallback((error: Event) => {
+    setConnectionStatus('error');
+    console.error(`[App] ${currentModuleType} 模块错误:`, error);
+  }, [currentModuleType]);
+
+  // 动态WebSocket Hook
+  const {
+    status,
+    lastMessage,
+    sendMessage,
+    connect,
+    disconnect,
+    reconnect
+  } = useDynamicWebSocket({
+    module: currentModuleType,
+    autoConnect: true,  // 自动连接
+    onMessage: handleMessage,
+    onConnect: handleConnect,
+    onDisconnect: handleDisconnect,
+    onError: handleError
+  });
+
+  // 同步状态
+  useEffect(() => {
+    setConnectionStatus(status);
+  }, [status]);
+
+  // 主题切换
   useEffect(() => {
     if (state.currentModule !== 'gateway') {
       document.documentElement.setAttribute('data-theme', state.currentModule);
@@ -30,57 +147,67 @@ export default function App() {
     }
   }, [state.currentModule]);
 
+  // 模块切换时重新连接
+  useEffect(() => {
+    if (state.currentModule !== 'gateway') {
+      reconnect();
+    } else {
+      disconnect();
+    }
+  }, [state.currentModule]);
+
+  // 切换模块
   const handleModuleSelect = (module: 'dry-eye' | 'sleep' | 'fatigue') => {
     setState(prev => ({ ...prev, currentModule: module }));
+    setModuleData(null);  // 清空旧数据
   };
 
+  // 返回网关
   const handleBackToGateway = () => {
     setState(prev => ({ ...prev, currentModule: 'gateway' }));
+    disconnect();
   };
 
+  // 蓝牙模态框
   const toggleBluetoothModal = () => {
     setState(prev => ({ ...prev, isBluetoothModalOpen: !prev.isBluetoothModalOpen }));
   };
 
+  // 设置模态框
   const toggleSettingsModal = () => {
     setState(prev => ({ ...prev, isSettingsModalOpen: !prev.isSettingsModalOpen }));
   };
 
+  // 帮助模态框
   const toggleHelpModal = () => {
     setState(prev => ({ ...prev, isHelpModalOpen: !prev.isHelpModalOpen }));
   };
 
-  const handleBluetoothDataReceived = (data: BluetoothSensorData) => {
-    console.log('蓝牙数据接收:', data);
-    fetch(`/api/${state.currentModule}/bluetooth-data`, {
+  // 处理蓝牙数据接收 - 发送到后端
+  const handleBluetoothDataReceived = useCallback((data: any) => {
+    console.log('[App] 蓝牙数据接收:', data);
+
+    const apiPaths: Record<ModuleType, string> = {
+      'dry-eye': '/api/bluetooth-data',
+      'sleep': '/api/bluetooth-data-sleep',
+      'fatigue': '/api/bluetooth-data-fatigue'
+    };
+    
+    const url = apiPaths[currentModuleType] || '/api/bluetooth-data';
+    console.log(`[App] 发送数据到: ${url}`);
+
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        rawData: data.values,
-        timestamp: data.timestamp,
-        signalQuality: data.signalQuality
+        rawData: data.values || data.rawData?.values || [],
+        timestamp: data.timestamp || Date.now(),
+        signalQuality: data.signalQuality || data.rawData?.signalQuality || 100
       })
-    }).catch(err => console.error('发送蓝牙数据失败:', err));
-  };
-
-  // 模块配置
-  const moduleConfig = {
-    'dry-eye': {
-      title: '干眼症监测',
-      icon: Eye,
-      color: 'primary-dryeye'
-    },
-    'sleep': {
-      title: '睡眠质量检测',
-      icon: Moon,
-      color: 'primary-sleep'
-    },
-    'fatigue': {
-      title: '疲劳驾驶预警',
-      icon: Car,
-      color: 'primary-fatigue'
-    }
-  };
+    }).then(response => {
+      console.log('[App] 数据发送成功:', response.status);
+    }).catch(err => console.error('[App] 发送蓝牙数据失败:', err));
+  }, [currentModuleType]);
 
   // 渲染网关页面
   if (state.currentModule === 'gateway') {
@@ -88,7 +215,7 @@ export default function App() {
   }
 
   // 渲染模块页面
-  const currentModuleConfig = moduleConfig[state.currentModule as 'dry-eye' | 'sleep' | 'fatigue'];
+  const currentModuleConfig = MODULE_CONFIG[currentModuleType];
   const Icon = currentModuleConfig.icon;
 
   return (
@@ -110,14 +237,23 @@ export default function App() {
               <h1 className="text-xl font-bold">{currentModuleConfig.title}</h1>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2">
+            {/* 连接状态指示 */}
+            <div className={`w-2 h-2 rounded-full ${
+              connectionStatus === 'connected' ? 'bg-green-500' :
+              connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
+              connectionStatus === 'error' ? 'bg-red-500' : 'bg-gray-500'
+            }`} />
+
             <button
               onClick={toggleBluetoothModal}
               className="p-2 rounded-full hover:bg-white/10 transition-colors relative"
             >
               <Bluetooth size={20} />
-              <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full"></span>
+              {connectionStatus === 'connected' && (
+                <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full"></span>
+              )}
             </button>
             <button
               onClick={toggleSettingsModal}
@@ -135,17 +271,21 @@ export default function App() {
         </div>
       </header>
 
-      {/* 主内容区域 */}
+      {/* 主内容区域 - 传递实时数据 */}
       <main className="container mx-auto px-4 py-8">
-        <UnifiedBentoDashboard module={state.currentModule as 'dry-eye' | 'sleep' | 'fatigue'} />
+        <UnifiedBentoDashboard
+          module={currentModuleType}
+          data={moduleData}
+          connectionStatus={connectionStatus}
+        />
       </main>
 
       {/* 蓝牙连接模态框 */}
       {state.isBluetoothModalOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="w-full max-w-md mx-4 relative">
-            <button 
-              onClick={toggleBluetoothModal} 
+            <button
+              onClick={toggleBluetoothModal}
               className="absolute top-2 right-2 z-50 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
             >
               ×
@@ -168,11 +308,11 @@ export default function App() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span>自动连接蓝牙</span>
-                <input type="checkbox" className="w-5 h-5 rounded" checked />
+                <input type="checkbox" className="w-5 h-5 rounded" />
               </div>
               <div className="flex items-center justify-between">
                 <span>实时数据推送</span>
-                <input type="checkbox" className="w-5 h-5 rounded" checked />
+                <input type="checkbox" className="w-5 h-5 rounded" defaultChecked />
               </div>
               <div className="flex items-center justify-between">
                 <span>夜间模式</span>

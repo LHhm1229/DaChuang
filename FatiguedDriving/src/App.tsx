@@ -180,7 +180,8 @@ export default function App() {
     // 支持 https 场景（wss），本地一般是 ws
     const isHttps = window.location.protocol === "https:";
     const proto = isHttps ? "wss" : "ws";
-    return `${proto}://localhost:3001/ws`;
+    // 后端疲劳算法服务运行在端口 3002
+    return `${proto}://localhost:3002/ws`;
   }, []);
 
   // ==============================
