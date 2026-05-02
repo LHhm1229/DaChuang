@@ -171,7 +171,7 @@ function calculateStats() {
 }
 
 // 启动服务器
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3002;
 server.listen(PORT, () => {
   console.log(`🚀 后端服务已启动`);
   console.log(`   服务器地址: http://localhost:${PORT}`);

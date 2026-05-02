@@ -4,14 +4,18 @@ from datetime import datetime
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_sock import Sock
+from flask_socketio import SocketIO, emit
 
 import numpy as np
 from algorithm.blink_fatigue import run_fatigue_pipeline
 
 app = Flask(__name__)
 CORS(app)  # 允许所有来源跨域
-sock = Sock(app)
+socketio = SocketIO(app, 
+                   async_mode='eventlet',
+                   ping_interval=25,
+                   ping_timeout=120,
+                   cors_allowed_origins="*")
 
 # =========================
 # 工具：确保输出可 JSON 序列化
@@ -55,73 +59,33 @@ data_stats = {
 # 记录当前所有 WebSocket 连接
 ws_clients = set()
 
-def safe_ws_send(ws, payload: dict) -> bool:
-    """发送 ws 消息，失败返回 False"""
-    try:
-        ws.send(json.dumps(payload, ensure_ascii=False))
-        return True
-    except Exception:
-        return False
-
 # =========================
 # WebSocket 连接处理
 # =========================
-@sock.route("/ws")
-def ws_handler(ws):
+@socketio.on('connect')
+def handle_connect():
     print("[WS] 前端客户端已连接")
-    ws_clients.add(ws)
-
-    # 连接握手：让前端立刻知道链路通了
-    safe_ws_send(ws, {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
-
-    # 连接时先推一次 stats
-    safe_ws_send(ws, {"type": "stats", "data": to_jsonable(data_stats)})
-
-    # 连接时如果已经有 fatigue 输出，立即推一次（前端 UI 更快“有东西可显示”）
+    emit('hello', {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
+    emit('stats', {"type": "stats", "data": to_jsonable(data_stats)})
     if last_fatigue_output is not None:
-        safe_ws_send(ws, {"type": "fatigue", "data": to_jsonable(last_fatigue_output)})
+        emit('fatigue', {"type": "fatigue", "data": to_jsonable(last_fatigue_output)})
 
-    try:
-        while True:
-            msg = ws.receive()
-            if msg is None:
-                break
+@socketio.on('disconnect')
+def handle_disconnect():
+    print("[WS] 前端客户端已断开")
 
-            # 支持前端心跳：ping -> pong
-            try:
-                obj = json.loads(msg)
-                if isinstance(obj, dict) and obj.get("type") == "ping":
-                    safe_ws_send(ws, {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
-                    continue
-            except Exception:
-                pass
-
-            # 如果你未来要支持“前端下发指令”，可以在这里扩展
-            # print("WS recv:", msg)
-
-    except Exception as e:
-        print("WebSocket 连接异常：", e)
-    finally:
-        ws_clients.discard(ws)
-        print("[WS] 前端客户端已断开")
+@socketio.on('ping')
+def handle_ping(data):
+    emit('pong', {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
 
 # =========================
 # 广播：蓝牙数据 / 疲劳结果
 # =========================
-def broadcast(payload: dict):
-    dead = []
-    for client in list(ws_clients):
-        ok = safe_ws_send(client, payload)
-        if not ok:
-            dead.append(client)
-    for c in dead:
-        ws_clients.discard(c)
-
 def broadcast_data(data_point):
-    broadcast({"type": "bluetooth_data", "data": to_jsonable(data_point)})
+    socketio.emit('bluetooth_data', {"type": "bluetooth_data", "data": to_jsonable(data_point)})
 
 def broadcast_fatigue(fatigue_output: dict):
-    broadcast({"type": "fatigue", "data": to_jsonable(fatigue_output)})
+    socketio.emit('fatigue', {"type": "fatigue", "data": to_jsonable(fatigue_output)})
 
 # =========================
 # 统计信息
@@ -310,9 +274,9 @@ if __name__ == "__main__":
     PORT = 3002
     print("[SERVER] 后端服务已启动")
     print(f"   HTTP:      http://localhost:{PORT}")
-    print(f"   WebSocket: ws://localhost:{PORT}/ws")
+    print(f"   WebSocket: ws://localhost:{PORT}/socket.io/")
     print(f"   POST BT:   http://localhost:{PORT}/api/bluetooth-data")
     print(f"   GET stats: http://localhost:{PORT}/api/stats")
     print(f"   GET fat:   http://localhost:{PORT}/api/fatigue-latest")
     print(f"   clear:     http://localhost:{PORT}/api/clear-buffer\n")
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    socketio.run(app, host="0.0.0.0", port=PORT, debug=True)

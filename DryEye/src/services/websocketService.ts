@@ -27,7 +27,7 @@ export interface WSDryEyeData {
     private maxReconnectAttempts = 5;
     private reconnectInterval = 3000; // 重连间隔3秒
   
-    constructor(url: string = 'ws://localhost:8080/ws') {
+    constructor(url: string = 'ws://localhost:3000/ws') {
       this.url = url;
     }
   
