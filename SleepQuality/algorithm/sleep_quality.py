@@ -203,7 +203,7 @@ def rule_based_sleep_staging(
     prev_stage: Optional[int] = None
 ) -> int:
     # 首先检查信号标准差 - 非常低的信号可能表示深睡
-    if features['signal_std'] < 0.05:
+    if features['signal_std'] < 0.2:
         return 3  # 深睡
     
     # 检查REM特征
@@ -215,7 +215,7 @@ def rule_based_sleep_staging(
         return 1  # 浅睡N1
     
     # 检查清醒特征
-    if features['rem_density'] > 0.5 or features['sem_count'] > 2:
+    if features['rem_density'] > 3.0 or features['sem_count'] > 5:
         return 0  # 清醒
     
     # 默认浅睡N2
@@ -279,10 +279,22 @@ def run_sleep_quality_pipeline(
     tst_min = to_minutes(n1_epochs + n2_epochs + n3_epochs + rem_epochs)
     se = (tst_min / total_minutes * 100) if total_minutes > 0 else 0.0
 
-    score = (n3_epochs * 3 + rem_epochs * 2 - wake_epochs * 1) / max(n_epochs, 1)
-    score = max(0, min(100, 50 + score * 50))
-
     current_stage = int(stage_sequence[-1]) if len(stage_sequence) > 0 else None
+    base_score = 50
+    if n_epochs == 1:
+        if current_stage == 3:
+            score = 75
+        elif current_stage == 4:
+            score = 70
+        elif current_stage == 2:
+            score = 60
+        elif current_stage == 1:
+            score = 45
+        else:
+            score = 30
+    else:
+        score = (n3_epochs * 3 + rem_epochs * 2 - wake_epochs * 1) / max(n_epochs, 1)
+        score = max(0, min(100, base_score + score * 50))
     stage_names = {0: "清醒", 1: "浅睡N1", 2: "浅睡N2", 3: "深睡", 4: "REM"}
 
     result = {
