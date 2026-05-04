@@ -68,7 +68,7 @@ def handle_connect():
     emit('hello', {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
     emit('stats', {"type": "stats", "data": to_jsonable(data_stats)})
     if last_fatigue_output is not None:
-        emit('fatigue', {"type": "fatigue", "data": to_jsonable(last_fatigue_output)})
+        emit('fatigue', to_jsonable(last_fatigue_output))
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -85,7 +85,7 @@ def broadcast_data(data_point):
     socketio.emit('bluetooth_data', {"type": "bluetooth_data", "data": to_jsonable(data_point)})
 
 def broadcast_fatigue(fatigue_output: dict):
-    socketio.emit('fatigue', {"type": "fatigue", "data": to_jsonable(fatigue_output)})
+    socketio.emit('fatigue', to_jsonable(fatigue_output))
 
 # =========================
 # 统计信息

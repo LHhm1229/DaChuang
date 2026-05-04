@@ -105,6 +105,8 @@ export interface ChartDataPoint {
  * 疲劳数据映射
  */
 export function mapFatigueData(backend: BackendFatigueData): UnifiedMetricData {
+  console.log("[DataMapper] Raw fatigue data received:", JSON.stringify(backend, null, 2));
+
   // 根据评分确定颜色
   const getScoreColor = (score: number): 'green' | 'yellow' | 'red' => {
     if (score < 40) return 'green';   // 精神好
@@ -112,21 +114,46 @@ export function mapFatigueData(backend: BackendFatigueData): UnifiedMetricData {
     return 'red';                      // 疲劳警告
   };
 
+  // 数据验证
+  const validateData = (data: BackendFatigueData): boolean => {
+    if (typeof data.fatigueScore !== 'number' || isNaN(data.fatigueScore)) {
+      console.error("[DataMapper] Validation failed: fatigueScore is invalid", data.fatigueScore);
+      return false;
+    }
+    return true;
+  };
+
+  if (!validateData(backend)) {
+    return {
+      mainValue: 0,
+      mainValueLabel: '疲劳评分',
+      mainValueUnit: '分',
+      mainValueColor: 'white',
+      secondaryMetrics: [],
+      chartData: [],
+      status: {
+        connected: false,
+        signalQuality: 0,
+        lastUpdate: new Date().toISOString()
+      }
+    };
+  }
+
   // 辅助指标
   const secondaryMetrics: SecondaryMetric[] = [
     {
       key: 'blinkRate',
       label: '眨眼频率',
-      value: backend.blinkRate,
+      value: typeof backend.blinkRate === 'number' ? backend.blinkRate : 0,
       unit: '次/分钟',
-      progress: Math.min(100, (backend.blinkRate / 30) * 100)
+      progress: Math.min(100, ((typeof backend.blinkRate === 'number' ? backend.blinkRate : 0) / 30) * 100)
     },
     {
       key: 'avgBlinkDuration',
       label: '平均眨眼时长',
-      value: Math.round(backend.avgBlinkDuration),
+      value: Math.round(typeof backend.avgBlinkDuration === 'number' ? backend.avgBlinkDuration : 0),
       unit: 'ms',
-      progress: Math.min(100, (backend.avgBlinkDuration / 500) * 100)
+      progress: Math.min(100, ((typeof backend.avgBlinkDuration === 'number' ? backend.avgBlinkDuration : 0) / 500) * 100)
     },
     {
       key: 'alertLevel',

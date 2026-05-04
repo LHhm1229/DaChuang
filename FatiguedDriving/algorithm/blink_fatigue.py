@@ -611,6 +611,11 @@ def assess_fatigue(
         "eyestatus": eye_status,
         "fatigueScore": round(fatigue_score, 1),
         "blinkRate": round(float(blink_features.get("blink_rate_per_min", 0.0)), 1),
+        "avgBlinkDuration": round(float(blink_features.get("blink_duration_ms", 0.0)), 1),
+        "alertLevel": alert_level,
+        "eyeStatus": eye_status,
+        "drivingTime": driving_time,
+        "fatigueLevel": fatigue_level,
         "eyelidStatus": {
             "leftEye": blink_features.get("left_eye_status", "open"),
             "rightEye": blink_features.get("right_eye_status", "open"),
@@ -627,9 +632,6 @@ def assess_fatigue(
         },
         "signalQuality": blink_features.get("signal_quality", None),
         "batteryLevel": blink_features.get("battery_level", None),
-        "drivingTime": driving_time,
-        "fatigueLevel": fatigue_level,
-        "alertLevel": alert_level,
         # 可选：把关键中间量透传给前端/日志（不影响旧字段）
         "debug": {
             "avgBlinkIntervalSec": round(float(blink_features.get("avg_blink_interval", 0.0)), 3),
