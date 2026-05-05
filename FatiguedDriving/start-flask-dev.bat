@@ -25,5 +25,4 @@ if defined VENV_PATH (
 echo 等待后端服务器启动...
 timeout /t 3 /nobreak >nul
 
-echo 正在启动前端开发服务器...
-start "Frontend_Vite" cmd /k "npm run dev"
+echo 后端服务启动完成
