@@ -8,6 +8,7 @@ from flask_socketio import SocketIO, emit
 
 import numpy as np
 from algorithm.blink_fatigue import run_fatigue_pipeline
+from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
 CORS(app)  # 允许所有来源跨域
@@ -36,28 +37,29 @@ def to_jsonable(obj):
         return [to_jsonable(v) for v in obj]
     return str(obj)
 
-# WebSocket 数据存储
-bluetooth_data = []  # 缓冲区，存储蓝牙数据
-start_driving_time = None  # 驾驶开始时间
-
 # =========================
-# 疲劳算法计算缓冲（窗口）
+# 数据缓冲区（使用统一模块）
 # =========================
-FATIGUE_WINDOW_SECONDS = 30  # 使用30秒窗口进行评估
+FATIGUE_WINDOW_SECONDS = 30
 SAMPLING_RATE = 100
-FATIGUE_MIN_SAMPLES = SAMPLING_RATE * 3  # 最少 3 秒数据就开始算
 
-fatigue_signal_buffer = []
+data_buffer = DataBuffer(
+    config=BufferConfig(
+        max_size=1000,
+        window_seconds=FATIGUE_WINDOW_SECONDS,
+        sampling_rate=SAMPLING_RATE,
+        min_samples=SAMPLING_RATE * 3
+    )
+)
+
 last_fatigue_output = None
+start_driving_time = None
 
 data_stats = {
     "totalReceived": 0,
     "lastUpdate": None,
     "bufferSize": 0,
 }
-
-# 记录当前所有 WebSocket 连接
-ws_clients = set()
 
 # =========================
 # WebSocket 连接处理
@@ -91,12 +93,12 @@ def broadcast_fatigue(fatigue_output: dict):
 # 统计信息
 # =========================
 def calculate_stats():
-    if len(bluetooth_data) == 0:
+    if len(data_buffer.raw_buffer) == 0:
         return {"count": 0, "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
 
-    all_values = [v for d in bluetooth_data for v in d.get("rawData", [])]
+    all_values = [v for d in data_buffer.raw_buffer for v in d.get("rawData", [])]
     if not all_values:
-        return {"count": len(bluetooth_data), "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
+        return {"count": len(data_buffer.raw_buffer), "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
 
     mean = sum(all_values) / len(all_values)
     variance = sum((val - mean) ** 2 for val in all_values) / len(all_values)
@@ -105,15 +107,15 @@ def calculate_stats():
     max_val = max(all_values)
 
     average_interval = 0
-    if len(bluetooth_data) > 1:
+    if len(data_buffer.raw_buffer) > 1:
         intervals = []
-        for i in range(1, len(bluetooth_data)):
-            intervals.append(bluetooth_data[i]["timestamp"] - bluetooth_data[i - 1]["timestamp"])
+        for i in range(1, len(data_buffer.raw_buffer)):
+            intervals.append(data_buffer.raw_buffer[i]["timestamp"] - data_buffer.raw_buffer[i - 1]["timestamp"])
         if intervals:
             average_interval = sum(intervals) / len(intervals)
 
     return {
-        "count": len(bluetooth_data),
+        "count": len(data_buffer.raw_buffer),
         "mean": round(mean, 3),
         "stdDev": round(std_dev, 3),
         "min": round(min_val, 3),
@@ -122,7 +124,7 @@ def calculate_stats():
     }
 
 # =========================
-# 最新疲劳结果接口（验收备用）
+# 最新疲劳结果接口
 # =========================
 @app.route("/api/fatigue-latest", methods=["GET"])
 def get_fatigue_latest():
@@ -140,7 +142,7 @@ def index():
 
 @app.route("/api/bluetooth-data", methods=["POST"])
 def receive_bluetooth_data():
-    global bluetooth_data, data_stats, fatigue_signal_buffer, last_fatigue_output, start_driving_time
+    global last_fatigue_output, start_driving_time
     print(f"[API] 收到数据请求: {request.method} {request.path}")
 
     try:
@@ -162,20 +164,17 @@ def receive_bluetooth_data():
             "receivedAt": datetime.utcnow().isoformat() + "Z",
         }
 
-        bluetooth_data.append(data_point)
-        if len(bluetooth_data) > 1000:
-            bluetooth_data = bluetooth_data[-1000:]
+        # 使用统一缓冲区
+        should_compute = data_buffer.add_data(data_point)
 
         data_stats["totalReceived"] += 1
         data_stats["lastUpdate"] = datetime.utcnow().isoformat() + "Z"
-        data_stats["bufferSize"] = len(bluetooth_data)
+        data_stats["bufferSize"] = len(data_buffer.raw_buffer)
 
-        # 终端日志
         time_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[DATA] [{time_str}] 蓝牙数据接收 #{data_stats['totalReceived']}")
-        print(f"   信号质量: {data_point['signalQuality']}% | 缓冲区: {len(bluetooth_data)} | 接收: {data_point['receivedAt']}")
+        print(f"   信号质量: {data_point['signalQuality']}% | 缓冲区: {len(data_buffer.raw_buffer)} | 接收: {data_point['receivedAt']}")
 
-        # 每 10 次打印统计
         if data_stats["totalReceived"] % 10 == 0:
             stats = calculate_stats()
             print("\n[STATS] 数据统计 (每10次):")
@@ -184,29 +183,17 @@ def receive_bluetooth_data():
             print(f"   数据范围: [{stats['min']:.3f}, {stats['max']:.3f}]")
             print(f"   标准差: {stats['stdDev']:.3f}")
 
-        # =========================
         # 疲劳算法：累积信号 + 定期评估
-        # =========================
         try:
-            chunk = data_point["rawData"] or []
-            chunk = [float(v) for v in chunk if isinstance(v, (int, float))]
-            if chunk:
-                fatigue_signal_buffer.extend(chunk)
-
-            max_len = int(FATIGUE_WINDOW_SECONDS * SAMPLING_RATE)
-            if len(fatigue_signal_buffer) > max_len:
-                fatigue_signal_buffer = fatigue_signal_buffer[-max_len:]
-
-            if len(fatigue_signal_buffer) >= FATIGUE_MIN_SAMPLES:
-                raw_np = np.asarray(fatigue_signal_buffer, dtype=float)
+            if should_compute:
+                raw_np = data_buffer.get_signal_array()
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
                     raw_np = raw_np[finite_mask]
 
-                if raw_np.size >= FATIGUE_MIN_SAMPLES:
+                if raw_np.size >= data_buffer.config.min_samples:
                     t0 = time.time()
                     
-                    # 计算驾驶时长
                     driving_duration = datetime.now() - start_driving_time
                     total_seconds = int(driving_duration.total_seconds())
                     hours = total_seconds // 3600
@@ -222,7 +209,6 @@ def receive_bluetooth_data():
                     fatigue_output = to_jsonable(fatigue_output)
                     last_fatigue_output = fatigue_output
 
-                    # ✅ 关键：推给前端（让 UI 变）
                     broadcast_fatigue(fatigue_output)
 
                     dt_ms = (time.time() - t0) * 1000.0
@@ -234,11 +220,7 @@ def receive_bluetooth_data():
         except Exception as fe:
             print("[ALGO] 疲劳算法计算失败：", fe)
 
-        # 推送原始蓝牙数据（可用于前端显示信号质量/连接活跃）
         broadcast_data(data_point)
-
-        # 也可以顺便推一次 stats（可选；不想太频繁可以改为每N次推）
-        # broadcast({"type": "stats", "data": to_jsonable(data_stats)})
 
         return jsonify({"success": True, "message": "数据接收成功"})
 
@@ -260,14 +242,13 @@ def get_stats():
 # =========================
 @app.route("/api/clear-buffer", methods=["POST"])
 def clear_buffer():
-    global bluetooth_data, data_stats, fatigue_signal_buffer, last_fatigue_output, start_driving_time
-    cleared_count = len(bluetooth_data)
-    bluetooth_data = []
-    fatigue_signal_buffer = []
+    global last_fatigue_output, start_driving_time
+    cleared_count = len(data_buffer.raw_buffer)
+    data_buffer.clear()
     last_fatigue_output = None
     start_driving_time = None
     data_stats["bufferSize"] = 0
-    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据（并清空 fatigue buffer）")
+    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据")
     return jsonify({"success": True, "message": f"已清空 {cleared_count} 条数据", "clearedCount": cleared_count})
 
 if __name__ == "__main__":

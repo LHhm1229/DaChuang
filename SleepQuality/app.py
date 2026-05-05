@@ -11,6 +11,7 @@ from flask_socketio import SocketIO, emit
 
 import numpy as np
 from algorithm.sleep_quality import run_sleep_quality_pipeline
+from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
 CORS(app, origins="*")
@@ -39,15 +40,23 @@ def to_jsonable(obj):
     return str(obj)
 
 
-bluetooth_data = []
-start_sleep_time = None
-
+# =========================
+# 数据缓冲区（使用统一模块）
+# =========================
 SLEEP_WINDOW_SECONDS = 30
 SAMPLING_RATE = 100
-SLEEP_MIN_SAMPLES = SAMPLING_RATE * 3
 
-sleep_signal_buffer = []
+data_buffer = DataBuffer(
+    config=BufferConfig(
+        max_size=1000,
+        window_seconds=SLEEP_WINDOW_SECONDS,
+        sampling_rate=SAMPLING_RATE,
+        min_samples=SAMPLING_RATE * 3
+    )
+)
+
 last_sleep_output = None
+start_sleep_time = None
 
 data_stats = {
     "totalReceived": 0,
@@ -74,7 +83,6 @@ def handle_disconnect():
 def handle_ping(data):
     emit('pong', {"ts": int(time.time() * 1000)})
 
-
 def broadcast_sleep_quality(sleep_output: dict):
     socketio.emit('sleepQuality', to_jsonable(sleep_output))
     try:
@@ -83,18 +91,17 @@ def broadcast_sleep_quality(sleep_output: dict):
         client_count = 'unknown'
     print(f"[WS] Broadcast sleepQuality data to {client_count} clients")
 
-
 def broadcast_data(data_point):
     socketio.emit('bluetooth_data', to_jsonable(data_point))
 
 
 def calculate_stats():
-    if len(bluetooth_data) == 0:
+    if len(data_buffer.raw_buffer) == 0:
         return {"count": 0, "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
 
-    all_values = [v for d in bluetooth_data for v in d.get("rawData", [])]
+    all_values = [v for d in data_buffer.raw_buffer for v in d.get("rawData", [])]
     if not all_values:
-        return {"count": len(bluetooth_data), "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
+        return {"count": len(data_buffer.raw_buffer), "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
 
     mean = sum(all_values) / len(all_values)
     variance = sum((val - mean) ** 2 for val in all_values) / len(all_values)
@@ -103,15 +110,15 @@ def calculate_stats():
     max_val = max(all_values)
 
     average_interval = 0
-    if len(bluetooth_data) > 1:
+    if len(data_buffer.raw_buffer) > 1:
         intervals = []
-        for i in range(1, len(bluetooth_data)):
-            intervals.append(bluetooth_data[i]["timestamp"] - bluetooth_data[i - 1]["timestamp"])
+        for i in range(1, len(data_buffer.raw_buffer)):
+            intervals.append(data_buffer.raw_buffer[i]["timestamp"] - data_buffer.raw_buffer[i - 1]["timestamp"])
         if intervals:
             average_interval = sum(intervals) / len(intervals)
 
     return {
-        "count": len(bluetooth_data),
+        "count": len(data_buffer.raw_buffer),
         "mean": round(mean, 3),
         "stdDev": round(std_dev, 3),
         "min": round(min_val, 3),
@@ -135,7 +142,7 @@ def index():
 
 @app.route("/api/bluetooth-data", methods=["POST"])
 def receive_bluetooth_data():
-    global bluetooth_data, data_stats, sleep_signal_buffer, last_sleep_output, start_sleep_time
+    global last_sleep_output, start_sleep_time
     print(f"[API] Received data request: {request.method} {request.path}")
 
     try:
@@ -157,17 +164,16 @@ def receive_bluetooth_data():
             "receivedAt": datetime.utcnow().isoformat() + "Z",
         }
 
-        bluetooth_data.append(data_point)
-        if len(bluetooth_data) > 1000:
-            bluetooth_data = bluetooth_data[-1000:]
+        # 使用统一缓冲区
+        should_compute = data_buffer.add_data(data_point)
 
         data_stats["totalReceived"] += 1
         data_stats["lastUpdate"] = datetime.utcnow().isoformat() + "Z"
-        data_stats["bufferSize"] = len(bluetooth_data)
+        data_stats["bufferSize"] = len(data_buffer.raw_buffer)
 
         time_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[DATA] [{time_str}] Bluetooth data received #{data_stats['totalReceived']}")
-        print(f"   Signal quality: {data_point['signalQuality']}% | Buffer: {len(bluetooth_data)} | Received: {data_point['receivedAt']}")
+        print(f"   Signal quality: {data_point['signalQuality']}% | Buffer: {len(data_buffer.raw_buffer)} | Received: {data_point['receivedAt']}")
 
         if data_stats["totalReceived"] % 10 == 0:
             stats = calculate_stats()
@@ -178,22 +184,13 @@ def receive_bluetooth_data():
             print(f"   Standard deviation: {stats['stdDev']:.3f}")
 
         try:
-            chunk = data_point["rawData"] or []
-            chunk = [float(v) for v in chunk if isinstance(v, (int, float))]
-            if chunk:
-                sleep_signal_buffer.extend(chunk)
-
-            max_len = int(SLEEP_WINDOW_SECONDS * SAMPLING_RATE)
-            if len(sleep_signal_buffer) > max_len:
-                sleep_signal_buffer = sleep_signal_buffer[-max_len:]
-
-            if len(sleep_signal_buffer) >= SLEEP_MIN_SAMPLES:
-                raw_np = np.asarray(sleep_signal_buffer, dtype=float)
+            if should_compute:
+                raw_np = data_buffer.get_signal_array()
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
                     raw_np = raw_np[finite_mask]
 
-                if raw_np.size >= SLEEP_MIN_SAMPLES:
+                if raw_np.size >= data_buffer.config.min_samples:
                     t0 = time.time()
 
                     sleep_duration = datetime.now() - start_sleep_time
@@ -257,10 +254,9 @@ def get_stats():
 
 @app.route("/api/clear-buffer", methods=["POST"])
 def clear_buffer():
-    global bluetooth_data, data_stats, sleep_signal_buffer, last_sleep_output, start_sleep_time
-    cleared_count = len(bluetooth_data)
-    bluetooth_data = []
-    sleep_signal_buffer = []
+    global last_sleep_output, start_sleep_time
+    cleared_count = len(data_buffer.raw_buffer)
+    data_buffer.clear()
     last_sleep_output = None
     start_sleep_time = None
     data_stats["bufferSize"] = 0

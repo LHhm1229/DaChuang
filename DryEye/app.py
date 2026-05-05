@@ -2,7 +2,6 @@ import json
 import time
 from datetime import datetime
 
-# 必须在其他导入之前注入eventlet猴子补丁
 import eventlet
 eventlet.monkey_patch()
 
@@ -12,15 +11,15 @@ from flask_socketio import SocketIO, emit
 
 import numpy as np
 from algorithm.dry_eye import run_dry_eye_pipeline
+from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
 CORS(app, origins="*")
 
-# 使用Flask-SocketIO配置
 socketio = SocketIO(app, 
                    async_mode='eventlet',
-                   ping_interval=25,    # 心跳间隔25秒
-                   ping_timeout=120,    # 心跳超时120秒
+                   ping_interval=25,
+                   ping_timeout=120,
                    cors_allowed_origins="*")
 
 def to_jsonable(obj):
@@ -39,40 +38,44 @@ def to_jsonable(obj):
         return [to_jsonable(v) for v in obj]
     return str(obj)
 
+# =========================
+# 数据缓冲区（使用统一模块）
+# =========================
+DRY_EYE_WINDOW_SECONDS = 10
+SAMPLING_RATE = 100
 
-bluetooth_data = []
+data_buffer = DataBuffer(
+    config=BufferConfig(
+        max_size=1000,
+        window_seconds=DRY_EYE_WINDOW_SECONDS,
+        sampling_rate=SAMPLING_RATE,
+        min_samples=SAMPLING_RATE * 3
+    )
+)
+
+last_dry_eye_output = None
+
 data_stats = {
     "totalReceived": 0,
     "lastUpdate": None,
     "bufferSize": 0,
 }
 
-DRY_EYE_WINDOW_SECONDS = 10
-SAMPLING_RATE = 100
-DRY_EYE_MIN_SAMPLES = SAMPLING_RATE * 3
-
-dry_eye_signal_buffer = []
-last_dry_eye_output = None
-
-
 @socketio.on('connect')
 def handle_connect():
     print("[WS] Client connected")
-    emit('hello', {"serverTime": datetime.utcnow().isoformat() + "Z"})
-    emit('stats', to_jsonable(data_stats))
+    emit('hello', {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
+    emit('stats', {"type": "stats", "data": to_jsonable(data_stats)})
     if last_dry_eye_output is not None:
         emit('dryEye', to_jsonable(last_dry_eye_output))
-
 
 @socketio.on('disconnect')
 def handle_disconnect():
     print("[WS] Client disconnected")
 
-
 @socketio.on('ping')
 def handle_ping(data):
-    emit('pong', {"ts": int(time.time() * 1000)})
-
+    emit('pong', {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
 
 def broadcast_dry_eye(dry_eye_output: dict):
     socketio.emit('dryEye', to_jsonable(dry_eye_output))
@@ -82,18 +85,16 @@ def broadcast_dry_eye(dry_eye_output: dict):
         client_count = 'unknown'
     print(f"[WS] Broadcast dryEye data to {client_count} clients")
 
-
 def broadcast_data(data_point):
-    socketio.emit('bluetooth_data', to_jsonable(data_point))
-
+    socketio.emit('bluetooth_data', {"type": "bluetooth_data", "data": to_jsonable(data_point)})
 
 def calculate_stats():
-    if len(bluetooth_data) == 0:
+    if len(data_buffer.raw_buffer) == 0:
         return {"count": 0, "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
 
-    all_values = [v for d in bluetooth_data for v in d.get("rawData", [])]
+    all_values = [v for d in data_buffer.raw_buffer for v in d.get("rawData", [])]
     if not all_values:
-        return {"count": len(bluetooth_data), "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
+        return {"count": len(data_buffer.raw_buffer), "mean": 0, "stdDev": 0, "min": 0, "max": 0, "averageInterval": 0}
 
     mean = sum(all_values) / len(all_values)
     variance = sum((val - mean) ** 2 for val in all_values) / len(all_values)
@@ -102,22 +103,21 @@ def calculate_stats():
     max_val = max(all_values)
 
     average_interval = 0
-    if len(bluetooth_data) > 1:
+    if len(data_buffer.raw_buffer) > 1:
         intervals = []
-        for i in range(1, len(bluetooth_data)):
-            intervals.append(bluetooth_data[i]["timestamp"] - bluetooth_data[i - 1]["timestamp"])
+        for i in range(1, len(data_buffer.raw_buffer)):
+            intervals.append(data_buffer.raw_buffer[i]["timestamp"] - data_buffer.raw_buffer[i - 1]["timestamp"])
         if intervals:
             average_interval = sum(intervals) / len(intervals)
 
     return {
-        "count": len(bluetooth_data),
+        "count": len(data_buffer.raw_buffer),
         "mean": round(mean, 3),
         "stdDev": round(std_dev, 3),
         "min": round(min_val, 3),
         "max": round(max_val, 3),
         "averageInterval": round(average_interval),
     }
-
 
 @app.route("/api/dry-eye-latest", methods=["GET"])
 def get_dry_eye_latest():
@@ -126,15 +126,13 @@ def get_dry_eye_latest():
         return jsonify({"success": False, "data": None, "reason": "No dry eye output yet. Need enough samples."})
     return jsonify({"success": True, "data": to_jsonable(last_dry_eye_output)})
 
-
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({"message": "Dry Eye Monitoring Backend is Running", "time": datetime.now().isoformat()})
 
-
 @app.route('/api/bluetooth-data', methods=['POST'])
 def receive_bluetooth_data():
-    global bluetooth_data, data_stats, dry_eye_signal_buffer, last_dry_eye_output
+    global last_dry_eye_output
 
     try:
         body = request.get_json(force=True, silent=False) or {}
@@ -152,17 +150,16 @@ def receive_bluetooth_data():
             "receivedAt": datetime.utcnow().isoformat() + "Z",
         }
 
-        bluetooth_data.append(data_point)
-        if len(bluetooth_data) > 1000:
-            bluetooth_data = bluetooth_data[-1000:]
+        # 使用统一缓冲区
+        should_compute = data_buffer.add_data(data_point)
 
         data_stats["totalReceived"] += 1
         data_stats["lastUpdate"] = datetime.utcnow().isoformat() + "Z"
-        data_stats["bufferSize"] = len(bluetooth_data)
+        data_stats["bufferSize"] = len(data_buffer.raw_buffer)
 
         time_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[DATA] [{time_str}] Bluetooth data received #{data_stats['totalReceived']}")
-        print(f"   Quality: {data_point['signalQuality']}% | Buffer: {len(bluetooth_data)} | Received: {data_point['receivedAt']}")
+        print(f"   Quality: {data_point['signalQuality']}% | Buffer: {len(data_buffer.raw_buffer)} | Received: {data_point['receivedAt']}")
         print(f"   RawData length: {len(data_point['rawData'])}")
 
         if data_stats["totalReceived"] % 10 == 0:
@@ -174,29 +171,14 @@ def receive_bluetooth_data():
             print(f"   StdDev: {stats['stdDev']:.3f}")
 
         try:
-            chunk = data_point["rawData"] or []
-            chunk = [float(v) for v in chunk if isinstance(v, (int, float))]
-            if chunk:
-                dry_eye_signal_buffer.extend(chunk)
-
-            max_len = int(DRY_EYE_WINDOW_SECONDS * SAMPLING_RATE)
-            
-            if len(dry_eye_signal_buffer) > max_len:
-                print(f"[BUFFER] Overflow warning: {len(dry_eye_signal_buffer)} -> {max_len}")
-                dry_eye_signal_buffer = dry_eye_signal_buffer[-max_len:]
-
-            print(f"[BUFFER] Signal buffer: {len(dry_eye_signal_buffer)}/{max_len} samples, can_compute={len(dry_eye_signal_buffer) >= DRY_EYE_MIN_SAMPLES}")
-
-            if len(dry_eye_signal_buffer) >= DRY_EYE_MIN_SAMPLES:
-                print(f"[ALGO] Ready to compute dry eye risk | Buffer length: {len(dry_eye_signal_buffer)}")
-                
-                raw_np = np.asarray(dry_eye_signal_buffer, dtype=float)
+            if should_compute:
+                raw_np = data_buffer.get_signal_array()
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
                     print(f"[ALGO] Found {len(raw_np) - np.sum(finite_mask)} invalid samples, filtered")
                     raw_np = raw_np[finite_mask]
 
-                if raw_np.size >= DRY_EYE_MIN_SAMPLES:
+                if raw_np.size >= data_buffer.config.min_samples:
                     t0 = time.time()
                     dry_eye_output = run_dry_eye_pipeline(
                         raw_signal=raw_np,
@@ -208,7 +190,6 @@ def receive_bluetooth_data():
 
                     print(f"[ALGO] Compute success | riskScore={dry_eye_output.get('dryEyeRiskScore')} | blinkRate={dry_eye_output.get('blinkRate')}")
                     
-                    # 使用eventlet.sleep释放协程控制权
                     eventlet.sleep(0.005)
                     broadcast_dry_eye(dry_eye_output)
 
@@ -221,9 +202,9 @@ def receive_bluetooth_data():
                         f"| longBlinkRatio={dry_eye_output.get('longBlinkRatio')}"
                     )
                 else:
-                    print(f"[ALGO] Not enough valid samples: {raw_np.size}/{DRY_EYE_MIN_SAMPLES}")
+                    print(f"[ALGO] Not enough valid samples: {raw_np.size}/{data_buffer.config.min_samples}")
             else:
-                print(f"[ALGO] Waiting for more samples: {len(dry_eye_signal_buffer)}/{DRY_EYE_MIN_SAMPLES}")
+                print(f"[ALGO] Waiting for more samples: {len(data_buffer.signal_buffer)}/{data_buffer.config.min_samples}")
         except Exception as fe:
             import traceback
             print(f"[ALGO] Computation failed: {fe}")
@@ -237,20 +218,17 @@ def receive_bluetooth_data():
         print("[DATA] Error processing bluetooth data:", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
-
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     stats = calculate_stats()
     result = {**data_stats, **stats}
     return jsonify(to_jsonable(result))
 
-
 @app.route("/api/clear-buffer", methods=["POST"])
 def clear_buffer():
-    global bluetooth_data, data_stats, dry_eye_signal_buffer, last_dry_eye_output
-    cleared_count = len(bluetooth_data)
-    bluetooth_data = []
-    dry_eye_signal_buffer = []
+    global last_dry_eye_output
+    cleared_count = len(data_buffer.raw_buffer)
+    data_buffer.clear()
     last_dry_eye_output = None
     data_stats["bufferSize"] = 0
 
@@ -262,7 +240,6 @@ def clear_buffer():
         "clearedCount": cleared_count,
     })
 
-
 if __name__ == '__main__':
     PORT = 3000
     print("[服务器] 干眼症后端服务启动中...")
@@ -273,5 +250,4 @@ if __name__ == '__main__':
     print(f"   API (POST 清空): http://localhost:{PORT}/api/clear-buffer")
     print("\n等待蓝牙数据...\n")
 
-    # 使用eventlet运行
     socketio.run(app, host='0.0.0.0', port=PORT, debug=True)
