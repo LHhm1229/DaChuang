@@ -202,24 +202,33 @@ def rule_based_sleep_staging(
     features: Dict[str, float],
     prev_stage: Optional[int] = None
 ) -> int:
-    # 首先检查信号标准差 - 非常低的信号可能表示深睡
-    if features['signal_std'] < 0.2:
-        return 3  # 深睡
+    signal_std = features['signal_std']
+    rem_density = features['rem_density']
+    sem_count = features['sem_count']
+    rem_energy = features['rem_energy']
     
-    # 检查REM特征
-    if features['rem_density'] > 0.3 and features['rem_sem_ratio'] > 2.0:
+    # 1. 首先检查深睡 - 信号非常稳定（标准差很小）
+    if signal_std < 0.03:
+        return 3  # 深睡 - 稳定的低值信号
+    
+    # 2. 检查清醒 - 高变异性或有明显眼动
+    if signal_std > 0.25 or sem_count > 10 or (rem_density > 5 and sem_count > 3):
+        return 0  # 清醒 - 高变异性
+    
+    # 3. 检查REM - 中等变异性 + 较高REM密度 + 较高REM能量
+    if rem_density > 2.0 and rem_energy > 1.0:
         return 4  # REM
     
-    # 检查浅睡特征
-    if features['sem_count'] >= 1 and features['rem_density'] < 0.2:
+    # 4. 检查浅睡N1 - 有一定SEM活动但REM密度低
+    if sem_count >= 3 and sem_count <= 10 and rem_density < 1.0:
         return 1  # 浅睡N1
     
-    # 检查清醒特征
-    if features['rem_density'] > 3.0 or features['sem_count'] > 5:
-        return 0  # 清醒
+    # 5. 检查浅睡N2 - 低REM密度，适度SEM活动
+    if rem_density < 2.0 and sem_count < 15:
+        return 2  # 浅睡N2
     
-    # 默认浅睡N2
-    return 2
+    # 默认返回前一状态或浅睡N2
+    return prev_stage if prev_stage is not None else 2
 
 
 def analyze_sleep_from_eyelid_sensor(
@@ -280,21 +289,17 @@ def run_sleep_quality_pipeline(
     se = (tst_min / total_minutes * 100) if total_minutes > 0 else 0.0
 
     current_stage = int(stage_sequence[-1]) if len(stage_sequence) > 0 else None
-    base_score = 50
-    if n_epochs == 1:
-        if current_stage == 3:
-            score = 75
-        elif current_stage == 4:
-            score = 70
-        elif current_stage == 2:
-            score = 60
-        elif current_stage == 1:
-            score = 45
-        else:
-            score = 30
-    else:
-        score = (n3_epochs * 3 + rem_epochs * 2 - wake_epochs * 1) / max(n_epochs, 1)
-        score = max(0, min(100, base_score + score * 50))
+    
+    # 基于睡眠阶段计算评分
+    # 清醒(0) -> 低分, 浅睡N1(1) -> 中低分, 浅睡N2(2) -> 中分, REM(4) -> 中高分, 深睡(3) -> 最高分
+    stage_scores = {
+        0: 20,   # 清醒 - 最低分
+        1: 45,   # 浅睡N1 - 中低分
+        2: 60,   # 浅睡N2 - 中分
+        4: 75,   # REM - 中高分
+        3: 85    # 深睡 - 最高分
+    }
+    score = stage_scores.get(current_stage, 50)
     stage_names = {0: "清醒", 1: "浅睡N1", 2: "浅睡N2", 3: "深睡", 4: "REM"}
 
     result = {
