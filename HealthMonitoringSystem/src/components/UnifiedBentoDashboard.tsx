@@ -146,13 +146,6 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
   const config = moduleConfigs[module];
   const theme = getThemeColors(module);
 
-  // 初始化模拟数据
-  useEffect(() => {
-    if (chartData.length === 0) {
-      setChartData(generateMockData(module));
-    }
-  }, [module, chartData.length]);
-
   // 处理实时数据更新
   useEffect(() => {
     if (data) {
@@ -192,9 +185,19 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
     }
   }, [data, module]);
 
-  // 定时更新模拟数据（当无实时数据时）
+  // 模拟数据开关状态
+  const [showMockData, setShowMockData] = useState(true);
+
+  // 初始化模拟数据（仅当开启模拟时）
   useEffect(() => {
-    if (!data) {
+    if (chartData.length === 0 && showMockData) {
+      setChartData(generateMockData(module));
+    }
+  }, [module, chartData.length, showMockData]);
+
+  // 定时更新模拟数据（当无实时数据且开启模拟时）
+  useEffect(() => {
+    if (!data && showMockData) {
       const interval = setInterval(() => {
         setChartData(generateMockData(module));
         if (module === 'dry-eye') {
@@ -207,7 +210,7 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [module, data]);
+  }, [module, data, showMockData]);
 
   // 蓝牙连接状态
   const bluetoothConnected = connectionStatus === 'connected';
@@ -339,6 +342,19 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
               >
                 {signalQuality > 70 ? '良好' : signalQuality > 40 ? '一般' : '较差'}
               </MemoizedGlassBadge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-white/80">模拟数据</span>
+              <button
+                onClick={() => setShowMockData(!showMockData)}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                  showMockData
+                    ? 'bg-green-500/20 text-green-400'
+                    : 'bg-gray-700/50 text-gray-400'
+                }`}
+              >
+                {showMockData ? '开启' : '关闭'}
+              </button>
             </div>
           </div>
         </MemoizedGlassCard>

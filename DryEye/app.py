@@ -135,11 +135,25 @@ def receive_bluetooth_data():
     global last_dry_eye_output
 
     try:
+        content_type = request.headers.get('Content-Type', '')
+        print(f"[API] Content-Type: {content_type}")
+        
         body = request.get_json(force=True, silent=False) or {}
+        print(f"[API] Raw body: {json.dumps(body, ensure_ascii=False)[:500]}...")
+        
         raw_data = body.get("rawData")
         timestamp = body.get("timestamp")
         signal_quality = body.get("signalQuality")
         values = body.get("values")
+
+        print(f"[API] rawData type: {type(raw_data)}, length: {len(raw_data) if isinstance(raw_data, list) else 'N/A'}")
+        print(f"[API] timestamp: {timestamp}")
+        print(f"[API] signalQuality: {signal_quality}")
+        print(f"[API] values type: {type(values)}, length: {len(values) if isinstance(values, list) else 'N/A'}")
+        
+        if isinstance(raw_data, list) and len(raw_data) > 0:
+            sample_count = min(5, len(raw_data))
+            print(f"[API] rawData first {sample_count} samples: {raw_data[:sample_count]}")
 
         now_ts_ms = int(time.time() * 1000)
         data_point = {

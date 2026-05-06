@@ -149,12 +149,28 @@ def receive_bluetooth_data():
         if start_driving_time is None:
             start_driving_time = datetime.now()
 
+        content_type = request.headers.get('Content-Type', '')
+        print(f"[API] Content-Type: {content_type}")
+        
         body = request.get_json(force=True, silent=False) or {}
+        print(f"[API] 原始请求体: {json.dumps(body, ensure_ascii=False)[:500]}...")
+        
         raw_data = body.get("rawData")
         timestamp = body.get("timestamp")
         signal_quality = body.get("signalQuality")
         values = body.get("values")
 
+        # 调试：检查数据类型和格式
+        print(f"[API] rawData 类型: {type(raw_data)}, 长度: {len(raw_data) if isinstance(raw_data, list) else 'N/A'}")
+        print(f"[API] timestamp: {timestamp}")
+        print(f"[API] signalQuality: {signal_quality}")
+        print(f"[API] values 类型: {type(values)}, 长度: {len(values) if isinstance(values, list) else 'N/A'}")
+        
+        # 打印前几个数据点（如果有）
+        if isinstance(raw_data, list) and len(raw_data) > 0:
+            sample_count = min(5, len(raw_data))
+            print(f"[API] rawData 前{sample_count}个样本: {raw_data[:sample_count]}")
+        
         now_ts_ms = int(time.time() * 1000)
         data_point = {
             "id": now_ts_ms,
@@ -166,6 +182,11 @@ def receive_bluetooth_data():
 
         # 使用统一缓冲区
         should_compute = data_buffer.add_data(data_point)
+        
+        # 打印缓冲区状态
+        buffer_stats = data_buffer.get_stats()
+        print(f"[API] 缓冲区状态: {json.dumps(buffer_stats, ensure_ascii=False)}")
+        print(f"[API] 是否触发计算: {should_compute}")
 
         data_stats["totalReceived"] += 1
         data_stats["lastUpdate"] = datetime.utcnow().isoformat() + "Z"
