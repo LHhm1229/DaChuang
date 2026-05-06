@@ -7,34 +7,34 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api/dry-eye': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/dry-eye/, '')
-      },
-      '/api/sleep': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/sleep/, '')
-      },
-      '/api/fatigue': {
+      '/api/bluetooth-data-fatigue': {
         target: 'http://localhost:3002',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/fatigue/, '')
-      },
-      '/api/bluetooth-data': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/bluetooth-data-fatigue/, '/api/bluetooth-data')
       },
       '/api/bluetooth-data-sleep': {
         target: 'http://localhost:3001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/bluetooth-data-sleep/, '/api/bluetooth-data')
       },
-      '/api/bluetooth-data-fatigue': {
+      '/api/bluetooth-data': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/api/fatigue': {
         target: 'http://localhost:3002',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/bluetooth-data-fatigue/, '/api/bluetooth-data')
+        rewrite: (path) => path.replace(/^\/api\/fatigue/, '')
+      },
+      '/api/sleep': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/sleep/, '')
+      },
+      '/api/dry-eye': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/dry-eye/, '')
       },
       '/ws/dry-eye': {
         target: 'ws://localhost:3000',

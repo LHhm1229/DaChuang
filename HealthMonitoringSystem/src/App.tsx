@@ -86,7 +86,7 @@ export default function App() {
     console.log(`[App] 收到消息 | 模块: ${currentModuleType} | 消息类型: ${msg.type} | 期望类型: ${moduleConfig.wsType}`);
 
     // 处理对应模块的数据
-    if (msg.type === moduleConfig.wsType || msg.type === 'result') {
+    if (msg.type === moduleConfig.wsType || msg.type === 'result' || msg.type === 'bluetooth_data') {
       console.log(`[App] 处理数据 | type=${msg.type} | data keys:`, msg.data ? Object.keys(msg.data) : '无数据');
       const mappedData = mapModuleData(currentModuleType, msg.data);
       if (mappedData) {
@@ -209,7 +209,11 @@ export default function App() {
         signalQuality: data.signalQuality || data.rawData?.signalQuality || 100
       })
     }).then(response => {
-      console.log('[App] 数据发送成功:', response.status);
+      if (response.ok) {
+        console.log('[App] 数据发送成功:', response.status);
+      } else {
+        console.error('[App] 数据发送失败:', response.status, response.statusText);
+      }
     }).catch(err => console.error('[App] 发送蓝牙数据失败:', err));
   }, [currentModuleType]);
 
