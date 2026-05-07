@@ -1,7 +1,6 @@
 flask
 flask-cors
-flask-sock
-numpy
-scipy
+flask-socketio
+eventlet
 numpy
 scipy
