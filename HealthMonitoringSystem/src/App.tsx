@@ -90,14 +90,20 @@ export default function App() {
     console.log(`[App] 收到消息 | 模块: ${currentModuleType} | 消息类型: ${msg.type} | 期望类型: ${moduleConfig.wsType}`);
 
     // 处理对应模块的数据
-    if (msg.type === moduleConfig.wsType || msg.type === 'result' || msg.type === 'bluetooth_data') {
-      console.log(`[App] 处理数据 | type=${msg.type} | data keys:`, msg.data ? Object.keys(msg.data) : '无数据');
+    if (msg.type === moduleConfig.wsType || msg.type === 'result') {
+      console.log(`[App] 处理结果数据 | type=${msg.type}`);
       const mappedData = mapModuleData(currentModuleType, msg.data);
       if (mappedData) {
-        console.log(`[App] 映射后数据 | mainValue=${mappedData.mainValue} | status=${mappedData.status.connected}`);
         setModuleData(mappedData);
-      } else {
-        console.log('[App] 数据映射返回null');
+      }
+    } else if (msg.type === 'bluetooth_data') {
+      // 只有当没有计算结果时，才使用原始蓝牙数据回显作为降级方案
+      // 或者如果你的逻辑需要实时显示原始波形，可以保留，但这里为了稳定 UI 做节流
+      console.log(`[App] 收到蓝牙回显，仅在无结果时更新`);
+      const mappedData = mapModuleData(currentModuleType, msg.data);
+      if (mappedData && (!moduleData || msg.type === 'bluetooth_data')) {
+        // 如果是蓝牙数据，我们只在没有主数据时更新，或者你可以选择直接忽略它以减少抖动
+        // setModuleData(mappedData); 
       }
     } else if (msg.type === 'hello') {
       console.log(`[App] 收到欢迎消息:`, msg.data);
