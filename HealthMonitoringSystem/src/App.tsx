@@ -68,8 +68,8 @@ export default function App() {
   const [moduleData, setModuleData] = useState<UnifiedMetricData | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
 
-  // 防抖定时器引用
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 节流控制引用
+  const lastSendTimeRef = useRef<number>(0);
 
   // 当前模块（用于WebSocket）
   const currentModuleType: ModuleType = state.currentModule === 'gateway' ? 'fatigue' : state.currentModule as ModuleType;
@@ -188,57 +188,52 @@ export default function App() {
     setState(prev => ({ ...prev, isHelpModalOpen: !prev.isHelpModalOpen }));
   };
 
-  // 处理蓝牙数据接收 - 发送到后端（带防抖）
+  // 处理蓝牙数据接收 - 发送到后端（使用节流 Throttling）
   const handleBluetoothDataReceived = useCallback((data: any) => {
     console.log('[App] 蓝牙数据接收(原始):', data);
     
-    // 防抖处理：每500ms只发送一次数据
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
+    const now = Date.now();
+    // 节流处理：每 500ms 最多发送一次数据
+    if (now - lastSendTimeRef.current < 500) {
+      return;
     }
 
-    debounceTimerRef.current = setTimeout(() => {
-      console.log('[App] 防抖后发送数据');
+    lastSendTimeRef.current = now;
+    console.log('[App] 节流后发送数据');
 
-      const apiPaths: Record<ModuleType, string> = {
-        'dry-eye': '/api/bluetooth-data',
-        'sleep': '/api/bluetooth-data-sleep',
-        'fatigue': '/api/bluetooth-data-fatigue'
-      };
-      
-      const url = apiPaths[currentModuleType] || '/api/bluetooth-data';
-      const fullUrl = `http://localhost:3002${url}`;
-      console.log(`[App] 发送数据到: ${fullUrl}`);
+    const port = MODULE_PORT_MAP[currentModuleType] || 3002;
+    const fullUrl = `http://localhost:${port}/api/bluetooth-data`;
+    
+    console.log(`[App] 发送数据到: ${fullUrl}`);
 
-      const payload = {
-        rawData: data.values || data.rawData?.values || [],
-        timestamp: data.timestamp || Date.now(),
-        signalQuality: data.signalQuality || data.rawData?.signalQuality || 100
-      };
-      
-      console.log('[App] 发送数据内容:', payload);
+    const payload = {
+      rawData: data.values || data.rawData?.values || [],
+      timestamp: data.timestamp || Date.now(),
+      signalQuality: data.signalQuality || data.rawData?.signalQuality || 100
+    };
+    
+    console.log('[App] 发送数据内容:', payload);
 
-      fetch(fullUrl, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify(payload)
-      }).then(response => {
-        console.log('[App] 响应状态:', response.status);
-        if (response.ok) {
-          return response.json();
-        } else {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-      }).then(json => {
-        console.log('[App] 数据发送成功，响应:', json);
-      }).catch(err => {
-        console.error('[App] 发送蓝牙数据失败:', err);
-        console.error('[App] 错误详情:', err.message);
-      });
-    }, 500); // 500ms 防抖
+    fetch(fullUrl, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      },
+      body: JSON.stringify(payload)
+    }).then(response => {
+      console.log('[App] 响应状态:', response.status);
+      if (response.ok) {
+        return response.json();
+      } else {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+    }).then(json => {
+      console.log('[App] 数据发送成功，响应:', json);
+    }).catch(err => {
+      console.error('[App] 发送蓝牙数据失败:', err);
+      console.error('[App] 错误详情:', err.message);
+    });
   }, [currentModuleType]);
 
   // 在应用启动时注册蓝牙数据监听器
@@ -253,15 +248,6 @@ export default function App() {
       bluetoothService.removeListener(handleBluetoothData);
     };
   }, [handleBluetoothDataReceived]);
-
-  // 清理防抖定时器
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, []);
 
   // 渲染网关页面
   if (state.currentModule === 'gateway') {
