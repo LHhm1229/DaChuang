@@ -91,6 +91,7 @@ class BluetoothService {
   }
 
   private notifyListeners(data: BluetoothSensorData): void {
+    console.log(`[BluetoothService] 通知 ${this.listeners.length} 个监听器`);
     this.listeners.forEach(listener => listener(data));
   }
 

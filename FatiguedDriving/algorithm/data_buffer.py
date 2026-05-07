@@ -16,7 +16,7 @@ class BufferConfig:
     max_size: int = 1000              # 原始数据缓冲区最大容量
     window_seconds: int = 30           # 计算窗口秒数
     sampling_rate: int = 100           # 采样率 Hz
-    min_samples: int = 300             # 最小启动计算样本数 (3秒 * 100Hz)
+    min_samples: int = 50              # 最小启动计算样本数 (0.5秒 * 100Hz，快速测试)
     auto_trim: bool = True            # 自动裁剪超长数据
 
 

@@ -3,7 +3,7 @@
  * 基于统一WebSocket通信层 + 数据映射层
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Gateway } from './components/Gateway';
 import { UnifiedBentoDashboard } from './components/UnifiedBentoDashboard';
 import { BluetoothControl } from './components/BluetoothControl';
@@ -11,6 +11,7 @@ import { GlassCard } from './components/ui/GlassCard';
 import { Eye, Moon, Car, Home, Settings, HelpCircle, Bluetooth } from 'lucide-react';
 import { useDynamicWebSocket, ModuleType } from './hooks/useDynamicWebSocket';
 import { mapModuleData, UnifiedMetricData } from './services/dataMapper';
+import { bluetoothService, BluetoothSensorData } from './services/bluetoothService';
 
 // =========================
 // 模块配置
@@ -66,6 +67,9 @@ export default function App() {
   // 当前模块数据
   const [moduleData, setModuleData] = useState<UnifiedMetricData | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+
+  // 防抖定时器引用
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 当前模块（用于WebSocket）
   const currentModuleType: ModuleType = state.currentModule === 'gateway' ? 'fatigue' : state.currentModule as ModuleType;
@@ -184,35 +188,80 @@ export default function App() {
     setState(prev => ({ ...prev, isHelpModalOpen: !prev.isHelpModalOpen }));
   };
 
-  // 处理蓝牙数据接收 - 发送到后端
+  // 处理蓝牙数据接收 - 发送到后端（带防抖）
   const handleBluetoothDataReceived = useCallback((data: any) => {
-    console.log('[App] 蓝牙数据接收:', data);
-
-    const apiPaths: Record<ModuleType, string> = {
-      'dry-eye': '/api/bluetooth-data',
-      'sleep': '/api/bluetooth-data-sleep',
-      'fatigue': '/api/bluetooth-data-fatigue'
-    };
+    console.log('[App] 蓝牙数据接收(原始):', data);
     
-    const url = apiPaths[currentModuleType] || '/api/bluetooth-data';
-    console.log(`[App] 发送数据到: ${url}`);
+    // 防抖处理：每500ms只发送一次数据
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
 
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    debounceTimerRef.current = setTimeout(() => {
+      console.log('[App] 防抖后发送数据');
+
+      const apiPaths: Record<ModuleType, string> = {
+        'dry-eye': '/api/bluetooth-data',
+        'sleep': '/api/bluetooth-data-sleep',
+        'fatigue': '/api/bluetooth-data-fatigue'
+      };
+      
+      const url = apiPaths[currentModuleType] || '/api/bluetooth-data';
+      const fullUrl = `http://localhost:3002${url}`;
+      console.log(`[App] 发送数据到: ${fullUrl}`);
+
+      const payload = {
         rawData: data.values || data.rawData?.values || [],
         timestamp: data.timestamp || Date.now(),
         signalQuality: data.signalQuality || data.rawData?.signalQuality || 100
-      })
-    }).then(response => {
-      if (response.ok) {
-        console.log('[App] 数据发送成功:', response.status);
-      } else {
-        console.error('[App] 数据发送失败:', response.status, response.statusText);
-      }
-    }).catch(err => console.error('[App] 发送蓝牙数据失败:', err));
+      };
+      
+      console.log('[App] 发送数据内容:', payload);
+
+      fetch(fullUrl, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify(payload)
+      }).then(response => {
+        console.log('[App] 响应状态:', response.status);
+        if (response.ok) {
+          return response.json();
+        } else {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+      }).then(json => {
+        console.log('[App] 数据发送成功，响应:', json);
+      }).catch(err => {
+        console.error('[App] 发送蓝牙数据失败:', err);
+        console.error('[App] 错误详情:', err.message);
+      });
+    }, 500); // 500ms 防抖
   }, [currentModuleType]);
+
+  // 在应用启动时注册蓝牙数据监听器
+  useEffect(() => {
+    const handleBluetoothData = (data: BluetoothSensorData) => {
+      handleBluetoothDataReceived(data);
+    };
+
+    bluetoothService.addListener(handleBluetoothData);
+
+    return () => {
+      bluetoothService.removeListener(handleBluetoothData);
+    };
+  }, [handleBluetoothDataReceived]);
+
+  // 清理防抖定时器
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   // 渲染网关页面
   if (state.currentModule === 'gateway') {

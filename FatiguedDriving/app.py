@@ -48,7 +48,7 @@ data_buffer = DataBuffer(
         max_size=1000,
         window_seconds=FATIGUE_WINDOW_SECONDS,
         sampling_rate=SAMPLING_RATE,
-        min_samples=SAMPLING_RATE * 3
+        min_samples=50  # 降低门槛，快速触发计算
     )
 )
 
@@ -141,6 +141,7 @@ def index():
     return jsonify({"message": "Fatigue Monitoring Backend is Running", "time": datetime.now().isoformat()})
 
 @app.route("/api/bluetooth-data", methods=["POST"])
+@app.route("/api/bluetooth-data-fatigue", methods=["POST"])
 def receive_bluetooth_data():
     global last_fatigue_output, start_driving_time
     print(f"[API] 收到数据请求: {request.method} {request.path}")

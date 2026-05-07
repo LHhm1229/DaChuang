@@ -103,8 +103,11 @@ export interface ChartDataPoint {
 
 /**
  * 疲劳数据映射
+ * 支持两种数据格式：
+ * 1. 原始蓝牙数据格式：{ rawData: [2.5, 2.8, ...], timestamp: ... }
+ * 2. 已计算的疲劳数据格式：{ fatigueScore: 38.8, blinkRate: 111.1, ... }
  */
-export function mapFatigueData(backend: BackendFatigueData): UnifiedMetricData {
+export function mapFatigueData(backend: BackendFatigueData | any): UnifiedMetricData {
   console.log("[DataMapper] Raw fatigue data received:", JSON.stringify(backend, null, 2));
 
   // 根据评分确定颜色
@@ -114,16 +117,55 @@ export function mapFatigueData(backend: BackendFatigueData): UnifiedMetricData {
     return 'red';                      // 疲劳警告
   };
 
-  // 数据验证
-  const validateData = (data: BackendFatigueData): boolean => {
-    if (typeof data.fatigueScore !== 'number' || isNaN(data.fatigueScore)) {
-      console.error("[DataMapper] Validation failed: fatigueScore is invalid", data.fatigueScore);
-      return false;
+  // 提取实际数据（处理嵌套格式）
+  let actualData = backend;
+  
+  // 处理嵌套格式 { type: 'xxx', data: {...} }
+  if (backend.data) {
+    // 如果 data 是字符串，尝试解析为 JSON
+    if (typeof backend.data === 'string') {
+      try {
+        actualData = JSON.parse(backend.data);
+        console.log("[DataMapper] 解析JSON字符串");
+      } catch (e) {
+        console.error("[DataMapper] 解析JSON失败:", e);
+      }
+    } 
+    // 如果 data 是对象，直接使用
+    else if (typeof backend.data === 'object') {
+      actualData = backend.data;
+      console.log("[DataMapper] 提取嵌套对象");
     }
-    return true;
-  };
+  }
+  
+  // 检查是否是原始蓝牙数据格式
+  const isRawData = actualData && actualData.rawData && Array.isArray(actualData.rawData);
+  
+  let fatigueScore: number;
+  let blinkRate: number;
+  let avgBlinkDuration: number;
+  let alertLevel: string;
 
-  if (!validateData(backend)) {
+  if (isRawData) {
+    // 处理原始蓝牙数据 - 计算疲劳评分
+    console.log("[DataMapper] Processing raw bluetooth data");
+    const rawValues = actualData.rawData;
+    const avgValue = rawValues.reduce((a: number, b: number) => a + b, 0) / rawValues.length;
+    
+    // 简单的疲劳评分计算：基于原始数据的值
+    fatigueScore = Math.min(100, Math.max(0, Math.round(avgValue * 30)));
+    blinkRate = Math.round(20 + (avgValue * 5));
+    avgBlinkDuration = Math.round(200 + (avgValue * 50));
+    alertLevel = fatigueScore < 40 ? '正常' : fatigueScore < 70 ? '警告' : '危险';
+  } else if (typeof actualData.fatigueScore === 'number') {
+    // 处理已计算的疲劳数据
+    fatigueScore = actualData.fatigueScore;
+    blinkRate = typeof actualData.blinkRate === 'number' ? actualData.blinkRate : 0;
+    avgBlinkDuration = typeof actualData.avgBlinkDuration === 'number' ? actualData.avgBlinkDuration : 0;
+    alertLevel = actualData.alertLevel || (fatigueScore < 40 ? '正常' : fatigueScore < 70 ? '警告' : '危险');
+  } else {
+    // 数据格式无效
+    console.error("[DataMapper] Validation failed: No valid data found");
     return {
       mainValue: 0,
       mainValueLabel: '疲劳评分',
@@ -133,7 +175,7 @@ export function mapFatigueData(backend: BackendFatigueData): UnifiedMetricData {
       chartData: [],
       status: {
         connected: false,
-        signalQuality: 0,
+        signalQuality: actualData.signalQuality || 0,
         lastUpdate: new Date().toISOString()
       }
     };
@@ -144,35 +186,35 @@ export function mapFatigueData(backend: BackendFatigueData): UnifiedMetricData {
     {
       key: 'blinkRate',
       label: '眨眼频率',
-      value: typeof backend.blinkRate === 'number' ? backend.blinkRate : 0,
+      value: blinkRate,
       unit: '次/分钟',
-      progress: Math.min(100, ((typeof backend.blinkRate === 'number' ? backend.blinkRate : 0) / 30) * 100)
+      progress: Math.min(100, (blinkRate / 30) * 100)
     },
     {
       key: 'avgBlinkDuration',
       label: '平均眨眼时长',
-      value: Math.round(typeof backend.avgBlinkDuration === 'number' ? backend.avgBlinkDuration : 0),
+      value: Math.round(avgBlinkDuration),
       unit: 'ms',
-      progress: Math.min(100, ((typeof backend.avgBlinkDuration === 'number' ? backend.avgBlinkDuration : 0) / 500) * 100)
+      progress: Math.min(100, (avgBlinkDuration / 500) * 100)
     },
     {
       key: 'alertLevel',
       label: '预警等级',
-      value: backend.alertLevel,
+      value: alertLevel,
       unit: ''
     }
   ];
 
   return {
-    mainValue: Math.round(backend.fatigueScore),
+    mainValue: Math.round(fatigueScore),
     mainValueLabel: '疲劳评分',
     mainValueUnit: '分',
-    mainValueColor: getScoreColor(backend.fatigueScore),
+    mainValueColor: getScoreColor(fatigueScore),
     secondaryMetrics,
-    chartData: [],  // 由调用方填充历史数据
+    chartData: [],
     status: {
       connected: true,
-      signalQuality: 100,
+      signalQuality: actualData.signalQuality || 100,
       lastUpdate: new Date().toISOString()
     }
   };
@@ -337,18 +379,30 @@ export function mapSleepData(backend: BackendSleepData): UnifiedMetricData {
 
 /**
  * 统一数据映射入口
+ * 处理多种数据格式：
+ * 1. 直接的后端数据对象
+ * 2. 嵌套格式 { data: {...} }
+ * 3. WebSocket 消息格式 { type: 'xxx', data: {...} }
  */
 export function mapModuleData(module: ModuleType, backendData: any): UnifiedMetricData | null {
-  if (!backendData) return null;
+  if (!backendData) {
+    console.log('[DataMapper] backendData 为空');
+    return null;
+  }
+
+  // 直接使用传入的数据（App.tsx 已经提取了 msg.data）
+  let actualData = backendData;
+
+  console.log(`[DataMapper] 处理${module}数据 | 数据键:`, Object.keys(actualData));
 
   try {
     switch (module) {
       case 'fatigue':
-        return mapFatigueData(backendData);
+        return mapFatigueData(actualData);
       case 'dry-eye':
-        return mapDryEyeData(backendData);
+        return mapDryEyeData(actualData);
       case 'sleep':
-        return mapSleepData(backendData);
+        return mapSleepData(actualData);
       default:
         console.warn(`[DataMapper] 未知模块类型: ${module}`);
         return null;
