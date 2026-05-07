@@ -49,7 +49,7 @@ data_buffer = DataBuffer(
         max_size=1000,
         window_seconds=DRY_EYE_WINDOW_SECONDS,
         sampling_rate=SAMPLING_RATE,
-        min_samples=SAMPLING_RATE * 3
+        min_samples=50
     )
 )
 
@@ -131,6 +131,7 @@ def index():
     return jsonify({"message": "Dry Eye Monitoring Backend is Running", "time": datetime.now().isoformat()})
 
 @app.route('/api/bluetooth-data', methods=['POST'])
+@app.route('/api/bluetooth-data-dry-eye', methods=['POST'])
 def receive_bluetooth_data():
     global last_dry_eye_output
 

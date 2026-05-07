@@ -51,7 +51,7 @@ data_buffer = DataBuffer(
         max_size=1000,
         window_seconds=SLEEP_WINDOW_SECONDS,
         sampling_rate=SAMPLING_RATE,
-        min_samples=SAMPLING_RATE * 3
+        min_samples=50
     )
 )
 
@@ -141,6 +141,7 @@ def index():
 
 
 @app.route("/api/bluetooth-data", methods=["POST"])
+@app.route("/api/bluetooth-data-sleep", methods=["POST"])
 def receive_bluetooth_data():
     global last_sleep_output, start_sleep_time
     print(f"[API] Received data request: {request.method} {request.path}")
