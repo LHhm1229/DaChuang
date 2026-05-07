@@ -185,15 +185,30 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
     }
   }, [data, module]);
 
-  // 模拟数据开关状态
+  // 模拟数据开关状态 - 有实时数据时自动禁用
   const [showMockData, setShowMockData] = useState(true);
 
-  // 初始化模拟数据（仅当开启模拟时）
+  // 当有实时数据传入时自动禁用模拟数据
   useEffect(() => {
-    if (chartData.length === 0 && showMockData) {
-      setChartData(generateMockData(module));
+    if (data) {
+      setShowMockData(false);
     }
-  }, [module, chartData.length, showMockData]);
+  }, [data]);
+
+  // 初始化模拟数据（仅当无实时数据且开启模拟时）
+  useEffect(() => {
+    if (chartData.length === 0 && showMockData && !data) {
+      setChartData(generateMockData(module));
+      // 初始化主值
+      if (module === 'dry-eye') {
+        setMainValue(Math.round(Math.random() * 50 + 20));
+      } else if (module === 'sleep') {
+        setMainValue(Math.round(Math.random() * 30 + 70));
+      } else {
+        setMainValue(Math.round(Math.random() * 40 + 30));
+      }
+    }
+  }, [module, chartData.length, showMockData, data]);
 
   // 定时更新模拟数据（当无实时数据且开启模拟时）
   useEffect(() => {

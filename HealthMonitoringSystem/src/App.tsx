@@ -104,19 +104,16 @@ export default function App() {
     }
   }, [currentModuleType]);
 
-  // 连接状态处理
+  // 连接状态处理 - 仅记录日志，状态由useDynamicWebSocket同步
   const handleConnect = useCallback(() => {
-    setConnectionStatus('connected');
     console.log(`[App] ${currentModuleType} 模块已连接`);
   }, [currentModuleType]);
 
   const handleDisconnect = useCallback(() => {
-    setConnectionStatus('disconnected');
     console.log(`[App] ${currentModuleType} 模块已断开`);
   }, [currentModuleType]);
 
   const handleError = useCallback((error: Event) => {
-    setConnectionStatus('error');
     console.error(`[App] ${currentModuleType} 模块错误:`, error);
   }, [currentModuleType]);
 
