@@ -91,31 +91,28 @@ const getThemeColors = (module: 'dry-eye' | 'sleep' | 'fatigue') => {
   }
 };
 
-// 半圆仪表盘组件
+// 3/4圆仪表盘组件
 const SemiCircularGauge = ({ value, module }: { value: number, module: 'dry-eye' | 'sleep' | 'fatigue' }) => {
   const radius = 80;
   const strokeWidth = 14;
   const normalizedValue = Math.min(100, Math.max(0, value));
-  const circumference = radius * Math.PI;
+  const fullCircumference = 2 * Math.PI * radius;
+  const circumference = fullCircumference * 0.75;
   const strokeDashoffset = circumference - (normalizedValue / 100) * circumference;
 
-  // 根据模块和数值动态计算颜色
   const getDynamicColor = () => {
     if (module === 'dry-eye') {
-      // 干眼症：分数越高风险越大，颜色由绿变红
-      if (value < 30) return '#10b981'; // 绿 (安全)
-      if (value < 60) return '#f59e0b'; // 黄 (预警)
-      return '#ef4444'; // 红 (高风险)
+      if (value < 30) return '#10b981';
+      if (value < 60) return '#f59e0b';
+      return '#ef4444';
     } else if (module === 'sleep') {
-      // 睡眠：分数越高越好，颜色由红变绿
-      if (value >= 80) return '#a855f7'; // 紫 (优)
-      if (value >= 60) return '#f59e0b'; // 黄 (良)
-      return '#ef4444'; // 红 (差)
+      if (value >= 80) return '#a855f7';
+      if (value >= 60) return '#f59e0b';
+      return '#ef4444';
     } else {
-      // 疲劳：分数越高越疲劳，颜色由绿变红
-      if (value < 40) return '#10b981'; // 绿 (清醒)
-      if (value < 70) return '#f97316'; // 橙 (轻度)
-      return '#ef4444'; // 红 (重度)
+      if (value < 40) return '#10b981';
+      if (value < 70) return '#f97316';
+      return '#ef4444';
     }
   };
 
@@ -123,27 +120,32 @@ const SemiCircularGauge = ({ value, module }: { value: number, module: 'dry-eye'
 
   return (
     <div className="relative flex flex-col items-center justify-center py-4">
-      <svg width="220" height="130" viewBox="0 0 200 120">
-        <path
-          d="M 20 100 A 80 80 0 0 1 180 100"
+      <svg width="220" height="180" viewBox="0 0 200 200" style={{ transform: 'rotate(135deg)', transformOrigin: 'center' }}>
+        <circle
+          cx="100"
+          cy="100"
+          r={radius}
           fill="none"
           stroke="rgba(255,255,255,0.05)"
           strokeWidth={strokeWidth}
+          strokeDasharray={`${circumference} ${fullCircumference}`}
           strokeLinecap="round"
         />
-        <path
-          d="M 20 100 A 80 80 0 0 1 180 100"
+        <circle
+          cx="100"
+          cy="100"
+          r={radius}
           fill="none"
           stroke={activeColor}
           strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
+          strokeDasharray={`${circumference} ${fullCircumference}`}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
           className="transition-all duration-1000 ease-out"
           style={{ filter: `drop-shadow(0 0 12px ${activeColor}44)` }}
         />
       </svg>
-      <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/4 text-center">
+      <div className="absolute top-[48%] left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center">
         <div className="flex items-baseline justify-center">
           <span className="text-6xl font-bold text-white tracking-tighter">{Math.round(value)}</span>
           <span className="text-2xl text-white/70 ml-1">分</span>
