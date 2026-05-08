@@ -1,4 +1,3 @@
-/*
 // Node.js 後端服務 - 接收和顯示藍牙數據
 const express = require('express');//Web框架（将URL路径映射到对应的处理函数等基本功能）
 const cors = require('cors');//跨域
@@ -171,9 +170,9 @@ function calculateStats() {
 }
 
 // 启动服务器
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 后端服务已启动`);
+  console.log(`🚀 睡眠质量检测后端服务已启动`);
   console.log(`   服务器地址: http://localhost:${PORT}`);
   console.log(`   WebSocket: ws://localhost:${PORT}`);
   console.log(`   蓝牙数据 API: http://localhost:${PORT}/api/bluetooth-data`);
@@ -190,4 +189,3 @@ process.on('SIGINT', () => {
     process.exit(0);
   });
 });
-*/

@@ -57,6 +57,7 @@ class BluetoothService {
   private deviceInfo: BluetoothDeviceInfo | null = null;
   private listeners: ((data: BluetoothSensorData) => void)[] = [];
   private errorListeners: ((error: Error) => void)[] = [];
+  private connectionListeners: ((connected: boolean) => void)[] = [];
 
   isSupported(): boolean {
     return 'bluetooth' in navigator;
@@ -90,6 +91,16 @@ class BluetoothService {
     this.errorListeners = this.errorListeners.filter(l => l !== callback);
   }
 
+  addConnectionListener(callback: (connected: boolean) => void): void {
+    this.connectionListeners.push(callback);
+    // 立即通知当前状态
+    callback(this.isDeviceConnected());
+  }
+
+  removeConnectionListener(callback: (connected: boolean) => void): void {
+    this.connectionListeners = this.connectionListeners.filter(l => l !== callback);
+  }
+
   private notifyListeners(data: BluetoothSensorData): void {
     console.log(`[BluetoothService] 通知 ${this.listeners.length} 个监听器`);
     this.listeners.forEach(listener => listener(data));
@@ -97,6 +108,10 @@ class BluetoothService {
 
   private notifyError(error: Error): void {
     this.errorListeners.forEach(listener => listener(error));
+  }
+
+  private notifyConnection(connected: boolean): void {
+    this.connectionListeners.forEach(listener => listener(connected));
   }
 
   async connectDevice(): Promise<boolean> {
@@ -183,6 +198,10 @@ class BluetoothService {
       await characteristic.startNotifications();
 
       this.deviceInfo = { device, server, service, characteristic };
+      
+      // 成功连接后通知
+      this.notifyConnection(true);
+      
       return true;
     } catch (error) {
       this.notifyError(error as Error);
@@ -194,6 +213,8 @@ class BluetoothService {
     if (this.deviceInfo) {
       this.deviceInfo.server.disconnect();
       this.deviceInfo = null;
+      // 断开连接后通知
+      this.notifyConnection(false);
     }
   }
 

@@ -67,6 +67,7 @@ export default function App() {
   // 当前模块数据
   const [moduleData, setModuleData] = useState<UnifiedMetricData | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [isBluetoothConnected, setIsBluetoothConnected] = useState(false);
 
   // 节流控制引用
   const lastSendTimeRef = useRef<number>(0);
@@ -242,6 +243,20 @@ export default function App() {
     });
   }, [currentModuleType]);
 
+  // 注册蓝牙连接监听器
+  useEffect(() => {
+    const handleBluetoothConnection = (connected: boolean) => {
+      console.log(`[App] 蓝牙连接状态变化: ${connected}`);
+      setIsBluetoothConnected(connected);
+    };
+
+    bluetoothService.addConnectionListener(handleBluetoothConnection);
+    
+    return () => {
+      bluetoothService.removeConnectionListener(handleBluetoothConnection);
+    };
+  }, []);
+
   // 在应用启动时注册蓝牙数据监听器
   useEffect(() => {
     const handleBluetoothData = (data: BluetoothSensorData) => {
@@ -264,65 +279,84 @@ export default function App() {
   const currentModuleConfig = MODULE_CONFIG[currentModuleType];
   const Icon = currentModuleConfig.icon;
 
+  // 根据模块获取头部背景色
+  const getHeaderBg = () => {
+    if (currentModuleType === 'dry-eye') return 'bg-[#122b25]/95';
+    if (currentModuleType === 'sleep') return 'bg-[#1a1135]/95';
+    return 'bg-[#2b1810]/95';
+  };
+
   return (
-    <div className="min-h-screen bg-background">
-      {/* 顶部状态栏 */}
-      <header className="glass-card sticky top-0 z-50 backdrop-blur-lg border-b border-border-color">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+    <div className="min-h-screen text-white">
+      {/* 顶部状态栏 - 优化为更加深邃的一体化设计 */}
+      <header className={`sticky top-0 z-50 backdrop-blur-xl border-b border-white/5 ${getHeaderBg()}`}>
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-6">
             <button
               onClick={handleBackToGateway}
-              className="p-2 rounded-full hover:bg-white/10 transition-colors"
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5"
             >
-              <Home size={20} />
+              <Home size={18} className="text-white/70" />
             </button>
-            <div className="flex items-center gap-2">
-              <div className={`p-2 rounded-full bg-${currentModuleConfig.color} text-white`}>
-                <Icon size={20} />
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg bg-white/5 text-white border border-white/10 shadow-lg`}>
+                <Icon size={20} className={currentModuleType === 'sleep' ? 'text-purple-400' : currentModuleType === 'fatigue' ? 'text-orange-400' : 'text-emerald-400'} />
               </div>
-              <h1 className="text-xl font-bold">{currentModuleConfig.title}</h1>
+              <h1 className="text-lg font-bold tracking-tight text-white/90">{currentModuleConfig.title}</h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* 连接状态指示 */}
-            <div className={`w-2 h-2 rounded-full ${
-              connectionStatus === 'connected' ? 'bg-green-500' :
-              connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
-              connectionStatus === 'error' ? 'bg-red-500' : 'bg-gray-500'
-            }`} />
+          <div className="flex items-center gap-3">
+            {/* 连接状态指示 - 严格按照要求显示颜色 */}
+            <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-full border border-white/5">
+              <div className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${
+                (connectionStatus === 'connected' && isBluetoothConnected) ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' :
+                (connectionStatus === 'error') ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' :
+                'bg-yellow-500 animate-pulse shadow-[0_0_10px_#eab308]'
+              }`} />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">
+                {(connectionStatus === 'connected' && isBluetoothConnected) ? 'Connected' : 
+                 (connectionStatus === 'error') ? 'Error' : 'Waiting'}
+              </span>
+            </div>
+
+            <div className="h-8 w-[1px] bg-white/10 mx-2" />
 
             <button
               onClick={toggleBluetoothModal}
-              className="p-2 rounded-full hover:bg-white/10 transition-colors relative"
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5 relative group"
             >
-              <Bluetooth size={20} />
+              <Bluetooth size={18} className="text-white/70 group-hover:text-white" />
               {connectionStatus === 'connected' && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full"></span>
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-[#0A0514]"></span>
               )}
             </button>
             <button
               onClick={toggleSettingsModal}
-              className="p-2 rounded-full hover:bg-white/10 transition-colors"
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5 group"
             >
-              <Settings size={20} />
+              <Settings size={18} className="text-white/70 group-hover:text-white" />
             </button>
             <button
               onClick={toggleHelpModal}
-              className="p-2 rounded-full hover:bg-white/10 transition-colors"
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5 group"
             >
-              <HelpCircle size={20} />
+              <HelpCircle size={18} className="text-white/70 group-hover:text-white" />
             </button>
           </div>
         </div>
       </header>
 
-      {/* 主内容区域 - 传递实时数据 */}
-      <main className="container mx-auto px-4 py-8">
+      {/* 主内容区域 */}
+      <main className="w-full">
         <UnifiedBentoDashboard
           module={currentModuleType}
           data={moduleData}
-          connectionStatus={connectionStatus}
+          connectionStatus={
+            (connectionStatus === 'connected' && isBluetoothConnected) 
+              ? 'connected' 
+              : (connectionStatus === 'error' ? 'error' : 'connecting')
+          }
         />
       </main>
 
