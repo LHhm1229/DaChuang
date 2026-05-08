@@ -54,6 +54,11 @@ interface AppState {
   isBluetoothModalOpen: boolean;
   isSettingsModalOpen: boolean;
   isHelpModalOpen: boolean;
+  settings: {
+    autoConnectBluetooth: boolean;
+    realtimeDataPush: boolean;
+    nightMode: boolean;
+  };
 }
 
 export default function App() {
@@ -61,7 +66,12 @@ export default function App() {
     currentModule: 'gateway',
     isBluetoothModalOpen: false,
     isSettingsModalOpen: false,
-    isHelpModalOpen: false
+    isHelpModalOpen: false,
+    settings: {
+      autoConnectBluetooth: false,
+      realtimeDataPush: true,
+      nightMode: false
+    }
   });
 
   // 当前模块数据
@@ -194,6 +204,41 @@ export default function App() {
   const toggleHelpModal = () => {
     setState(prev => ({ ...prev, isHelpModalOpen: !prev.isHelpModalOpen }));
   };
+
+  // 处理设置变更
+  const handleSettingChange = (key: keyof AppState['settings'], value: boolean) => {
+    setState(prev => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        [key]: value
+      }
+    }));
+  };
+
+  // 保存设置到 localStorage
+  const saveSettings = () => {
+    localStorage.setItem('health-monitor-settings', JSON.stringify(state.settings));
+    console.log('[App] 设置已保存:', state.settings);
+    toggleSettingsModal();
+  };
+
+  // 从 localStorage 加载设置
+  useEffect(() => {
+    const savedSettings = localStorage.getItem('health-monitor-settings');
+    if (savedSettings) {
+      try {
+        const parsedSettings = JSON.parse(savedSettings);
+        setState(prev => ({
+          ...prev,
+          settings: { ...prev.settings, ...parsedSettings }
+        }));
+        console.log('[App] 已加载保存的设置:', parsedSettings);
+      } catch (e) {
+        console.error('[App] 加载设置失败:', e);
+      }
+    }
+  }, []);
 
   // 处理蓝牙数据接收 - 发送到后端（使用节流 Throttling）
   const handleBluetoothDataReceived = useCallback((data: any) => {
@@ -375,7 +420,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 系统设置模态框 */}
+ {/* 系统设置模态框 */}
       {state.isSettingsModalOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
           <GlassCard className="w-full max-w-md p-6">
@@ -388,18 +433,36 @@ export default function App() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span>自动连接蓝牙</span>
-                <input type="checkbox" className="w-5 h-5 rounded" />
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded"
+                  checked={state.settings.autoConnectBluetooth}
+                  onChange={(e) => handleSettingChange('autoConnectBluetooth', e.target.checked)}
+                />
               </div>
               <div className="flex items-center justify-between">
                 <span>实时数据推送</span>
-                <input type="checkbox" className="w-5 h-5 rounded" defaultChecked />
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded"
+                  checked={state.settings.realtimeDataPush}
+                  onChange={(e) => handleSettingChange('realtimeDataPush', e.target.checked)}
+                />
               </div>
               <div className="flex items-center justify-between">
                 <span>夜间模式</span>
-                <input type="checkbox" className="w-5 h-5 rounded" />
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded"
+                  checked={state.settings.nightMode}
+                  onChange={(e) => handleSettingChange('nightMode', e.target.checked)}
+                />
               </div>
               <div className="pt-4 border-t border-border-color">
-                <button className="w-full py-2 bg-primary rounded-lg text-white">
+                <button
+                  onClick={saveSettings}
+                  className="w-full py-2 bg-primary rounded-lg text-white hover:bg-primary/80 transition-colors"
+                >
                   保存设置
                 </button>
               </div>
