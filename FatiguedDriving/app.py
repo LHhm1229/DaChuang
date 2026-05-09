@@ -67,8 +67,8 @@ data_stats = {
 @socketio.on('connect')
 def handle_connect():
     print("[WS] 前端客户端已连接")
-    emit('hello', {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
-    emit('stats', {"type": "stats", "data": to_jsonable(data_stats)})
+    emit('hello', {"serverTime": datetime.utcnow().isoformat() + "Z"})
+    emit('stats', to_jsonable(data_stats))
     if last_fatigue_output is not None:
         emit('fatigue', to_jsonable(last_fatigue_output))
 
@@ -78,13 +78,13 @@ def handle_disconnect():
 
 @socketio.on('ping')
 def handle_ping(data):
-    emit('pong', {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
+    emit('pong', {"ts": int(time.time() * 1000)})
 
 # =========================
 # 广播：蓝牙数据 / 疲劳结果
 # =========================
 def broadcast_data(data_point):
-    socketio.emit('bluetooth_data', {"type": "bluetooth_data", "data": to_jsonable(data_point)})
+    socketio.emit('bluetooth_data', to_jsonable(data_point))
 
 def broadcast_fatigue(fatigue_output: dict):
     socketio.emit('fatigue', to_jsonable(fatigue_output))

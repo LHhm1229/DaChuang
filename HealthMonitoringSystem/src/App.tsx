@@ -269,8 +269,7 @@ export default function App() {
     fetch(fullUrl, {
       method: 'POST',
       headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     }).then(response => {

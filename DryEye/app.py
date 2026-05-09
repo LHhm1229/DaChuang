@@ -64,8 +64,8 @@ data_stats = {
 @socketio.on('connect')
 def handle_connect():
     print("[WS] Client connected")
-    emit('hello', {"type": "hello", "data": {"serverTime": datetime.utcnow().isoformat() + "Z"}})
-    emit('stats', {"type": "stats", "data": to_jsonable(data_stats)})
+    emit('hello', {"serverTime": datetime.utcnow().isoformat() + "Z"})
+    emit('stats', to_jsonable(data_stats))
     if last_dry_eye_output is not None:
         emit('dryEye', to_jsonable(last_dry_eye_output))
 
@@ -75,7 +75,7 @@ def handle_disconnect():
 
 @socketio.on('ping')
 def handle_ping(data):
-    emit('pong', {"type": "pong", "data": {"ts": int(time.time() * 1000)}})
+    emit('pong', {"ts": int(time.time() * 1000)})
 
 def broadcast_dry_eye(dry_eye_output: dict):
     socketio.emit('dryEye', to_jsonable(dry_eye_output))
@@ -86,7 +86,7 @@ def broadcast_dry_eye(dry_eye_output: dict):
     print(f"[WS] Broadcast dryEye data to {client_count} clients")
 
 def broadcast_data(data_point):
-    socketio.emit('bluetooth_data', {"type": "bluetooth_data", "data": to_jsonable(data_point)})
+    socketio.emit('bluetooth_data', to_jsonable(data_point))
 
 def calculate_stats():
     if len(data_buffer.raw_buffer) == 0:
