@@ -4,11 +4,30 @@
  * 布局已根据理想图进行重构
  */
 
-import React, { useState, useEffect, memo } from 'react';
+import React, { useState, useEffect, memo, useRef } from 'react';
 import { GlassCard, GlassProgress, GlassBadge } from './ui';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { UnifiedMetricData, SecondaryMetric, ChartDataPoint } from '../services/dataMapper';
-import { Smartphone, Activity, Wind, Droplets, Thermometer, Zap } from 'lucide-react';
+import { Smartphone, Activity, Wind, Droplets, Thermometer, Zap, HardHat, Battery, Timer, RefreshCw, Power } from 'lucide-react';
+
+// 1. 智能监测帽图标 - 极简科技感
+const SmartHatIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M3 15c0-4.5 4-8 9-8s9 3.5 9 8" />
+    <path d="M12 7V5" />
+    <path d="M21 15h2a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H10" />
+    <circle cx="12" cy="11" r="1" fill="currentColor" />
+  </svg>
+);
+
+// 2. 智能眼罩图标 - 极简科技感
+const SmartMaskIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <rect x="2" y="8" width="20" height="8" rx="4" />
+    <path d="M6 12h2M16 12h2" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" />
+  </svg>
+);
 
 // 性能优化：使用React.memo包装玻璃态卡片组件
 const MemoizedGlassCard = memo(GlassCard);
@@ -17,6 +36,9 @@ interface UnifiedBentoDashboardProps {
   module: 'dry-eye' | 'sleep' | 'fatigue';
   data: UnifiedMetricData | null;  // 接收外部传入的实时数据
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  isMonitoring: boolean;
+  onToggleMonitoring: () => void;
+  monitorTime: number;
 }
 
 // 模块配置
@@ -30,8 +52,9 @@ const moduleConfigs = {
       { key: 'blinkRate', name: '眨眼频率', color: '#10b981' },
       { key: 'dryEyeRisk', name: '干眼风险', color: '#f59e0b' }
     ],
-    device: '智能监测眼镜',
-    envIcons: [Thermometer, Droplets, Wind]
+    device: '柔性干眼监测帽',
+    envIcons: [Thermometer, Droplets, Wind],
+    deviceIcon: Smartphone
   },
   'sleep': {
     title: '睡眠质量检测',
@@ -42,8 +65,9 @@ const moduleConfigs = {
       { key: 'sleepScore', name: '睡眠质量', color: '#a855f7' },
       { key: 'remDensity', name: 'REM 密度', color: '#ec4899' }
     ],
-    device: '智能睡眠枕',
-    envIcons: [Thermometer, Droplets, Wind]
+    device: '智能睡眠眼罩',
+    envIcons: [Thermometer, Droplets, Wind],
+    deviceIcon: Smartphone
   },
   'fatigue': {
     title: '疲劳驾驶预警',
@@ -54,8 +78,9 @@ const moduleConfigs = {
       { key: 'fatigueScore', name: '疲劳评分', color: '#f97316' },
       { key: 'blinkDuration', name: '眨眼时长', color: '#eab308' }
     ],
-    device: '驾驶监测终端',
-    envIcons: [Thermometer, Activity, Zap]
+    device: '疲劳驾驶预警帽',
+    envIcons: [Thermometer, Activity, Zap],
+    deviceIcon: Smartphone
   }
 };
 
@@ -164,26 +189,31 @@ const SemiCircularGauge = ({ value, module }: { value: number, module: 'dry-eye'
   );
 };
 
-// 心率波形模拟组件
+// 心率波形模拟组件 - 无缝循环滚动
 const HeartRateWave = ({ color }: { color: string }) => {
+  // 定义一个周期波形
+  const wavePath = "0,30 20,30 25,10 35,50 40,30 60,30 65,10 75,50 80,30 100,30 105,5 115,55 120,30 140,30 145,10 155,50 160,30 180,30 185,10 195,50 200,30";
+  
   return (
-    <div className="w-full h-16 opacity-40 overflow-hidden">
-      <svg viewBox="0 0 200 60" className="w-full h-full">
-        <polyline
-          fill="none"
-          stroke={color}
-          strokeWidth="2"
-          points="0,30 20,30 25,10 35,50 40,30 60,30 65,10 75,50 80,30 100,30 105,5 115,55 120,30 140,30 145,10 155,50 160,30 180,30 185,10 195,50 200,30"
-          className="heart-rate-anim"
-        />
-      </svg>
+    <div className="w-full h-16 opacity-40 overflow-hidden relative">
+      <div className="flex w-[200%] h-full heart-rate-container">
+        <svg viewBox="0 0 200 60" className="w-1/2 h-full preserve-aspect" preserveAspectRatio="none">
+          <polyline fill="none" stroke={color} strokeWidth="2" points={wavePath} />
+        </svg>
+        <svg viewBox="0 0 200 60" className="w-1/2 h-full preserve-aspect" preserveAspectRatio="none">
+          <polyline fill="none" stroke={color} strokeWidth="2" points={wavePath} />
+        </svg>
+      </div>
       <style dangerouslySetInnerHTML={{ __html: `
-        @keyframes heartRate {
+        @keyframes scrollHeartRate {
           0% { transform: translateX(0); }
           100% { transform: translateX(-50%); }
         }
-        .heart-rate-anim {
-          animation: heartRate 4s linear infinite;
+        .heart-rate-container {
+          animation: scrollHeartRate 6s linear infinite;
+        }
+        .preserve-aspect {
+          vector-effect: non-scaling-stroke;
         }
       `}} />
     </div>
@@ -193,14 +223,34 @@ const HeartRateWave = ({ color }: { color: string }) => {
 export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
   module,
   data,
-  connectionStatus
+  connectionStatus,
+  isMonitoring,
+  onToggleMonitoring,
+  monitorTime
 }) => {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [mainValue, setMainValue] = useState<number>(0);
   const [secondaryMetrics, setSecondaryMetrics] = useState<SecondaryMetric[]>([]);
-
+  
   const config = moduleConfigs[module];
   const theme = getThemeColors(module);
+
+  const isConnected = connectionStatus === 'connected';
+
+  // 格式化监测时长 (HH:MM:SS)
+  const formatTime = (seconds: number) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // 模拟设备状态数据 (当监测开启且连接时)
+  const deviceStatusData = {
+    battery: (isConnected && isMonitoring) ? 85 : 0,
+    samplingRate: (isConnected && isMonitoring) ? 250 : 0,
+    latency: (isConnected && isMonitoring) ? 15 : 0
+  };
 
   // 初始化图表模拟数据
   useEffect(() => {
@@ -223,10 +273,11 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
 
   // 处理实时数据更新
   useEffect(() => {
-    if (data) {
+    if (data && isMonitoring && isConnected) {
       setMainValue(data.mainValue as number);
       setSecondaryMetrics(data.secondaryMetrics);
-
+      
+      // 只有在开启监测时才更新图表
       setChartData(prev => {
         const newPoint: ChartDataPoint = {
           time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
@@ -239,10 +290,11 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
         };
         return [...prev.slice(1), newPoint];
       });
+    } else if (!isMonitoring) {
+      // 监测暂停时，保持当前值但不更新，或者你可以选择清空
+      // 为了让“不动了”的效果更明显，我们不清除数据，只是不让它跳动
     }
-  }, [data, module]);
-
-  const isConnected = connectionStatus === 'connected';
+  }, [data, module, isMonitoring, isConnected]);
 
   return (
     <div className={`min-h-screen ${theme.bgGradient} text-white p-4 md:p-8 font-sans ${theme.selection}`}>
@@ -250,35 +302,33 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
         
         {/* 1. 主评分区域 (3/4 width) */}
         <MemoizedGlassCard className={`md:col-span-3 md:row-span-2 ${theme.cardBg} ${theme.cardBorder} flex flex-col items-center justify-center p-10 relative overflow-hidden group`}>
-          <div className="absolute top-6 left-8 text-white/30 text-xs font-bold uppercase tracking-[0.2em]">{config.mainMetricLabel}</div>
-          <SemiCircularGauge value={mainValue} module={module} />
+          <div className="absolute top-6 left-8 text-white/30 text-sm font-bold uppercase tracking-[0.2em]">{config.mainMetricLabel}</div>
+          <SemiCircularGauge value={isMonitoring ? mainValue : 0} module={module} />
           <div className="mt-2 flex items-center gap-3 bg-white/5 px-6 py-2 rounded-full border border-white/5 backdrop-blur-md">
-            <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-white/20'}`} />
-            <span className="text-sm font-medium text-white/60">{isConnected ? '实时监测中' : '等待设备连接...'}</span>
+            <div className={`w-2.5 h-2.5 rounded-full ${isConnected && isMonitoring ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-white/20'}`} />
+            <span className="text-sm font-medium text-white/60">{isConnected && isMonitoring ? '实时监测中' : isConnected ? '等待开始监测' : '等待设备连接...'}</span>
           </div>
         </MemoizedGlassCard>
 
         {/* 2. 设备状态区域 (1/4 width) */}
-        <MemoizedGlassCard className={`md:col-span-1 md:row-span-2 ${theme.cardBg} ${theme.cardBorder} p-8 flex flex-col justify-between group`}>
+        <MemoizedGlassCard className={`md:col-span-1 md:row-span-2 ${theme.cardBg} ${theme.cardBorder} p-8 flex flex-col justify-between group relative`}>
           <div className="space-y-8">
-            <h3 className="text-sm font-bold text-white/30 uppercase tracking-[0.2em]">Device & Heart Rate</h3>
-            <div className="flex items-start gap-4">
-              <div className="p-4 bg-white/5 rounded-2xl border border-white/5 group-hover:border-white/10 transition-colors">
-                <Smartphone size={24} className={theme.accent} />
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-white/30 uppercase tracking-[0.2em]">设备</h3>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="p-4 bg-white/5 rounded-2xl border border-white/5 group-hover:border-white/10 transition-colors shrink-0">
+                <config.deviceIcon size={28} className={theme.accent} />
               </div>
-              <div>
-                <p className="text-xs text-white/30 mb-1">Device</p>
-                <p className="text-lg font-bold text-white/90">{config.device}</p>
-                <p className={`text-xs mt-1 font-medium ${isConnected ? 'text-green-400' : 'text-white/20'}`}>
-                  {isConnected ? 'Connected' : 'Disconnected'}
-                </p>
+              <div className="min-w-0">
+                <p className="text-base font-bold text-white/90 leading-tight truncate">{config.device}</p>
               </div>
             </div>
           </div>
           <div className="space-y-6">
-            <div className="flex items-center justify-between text-xs font-bold tracking-wider">
-              <span className="text-white/30 uppercase">Signal Quality</span>
-              <span className={theme.accent}>{isConnected ? '98%' : '--'}</span>
+            <div className="flex items-center justify-between font-bold tracking-wider">
+              <span className="text-white/30 text-[13px] uppercase">信号质量</span>
+              <span className={`${theme.accent} text-sm`}>{isConnected && isMonitoring ? `${data?.status?.signalQuality || 0}%` : '--'}</span>
             </div>
             <HeartRateWave color={theme.primary} />
           </div>
@@ -312,21 +362,39 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
           );
         })}
 
-        {/* 6. 环境指数卡片 */}
+        {/* 6. 设备状态卡片 */}
         <MemoizedGlassCard className={`${theme.cardBg} ${theme.cardBorder} p-6 flex flex-col justify-between group hover:translate-y-[-2px] transition-transform`}>
-          <h4 className="text-xs font-bold text-white/30 uppercase tracking-[0.2em] mb-4">Environment</h4>
+          <h4 className="text-sm font-bold text-white/30 uppercase tracking-[0.2em] mb-4">设备状态</h4>
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <span className="text-xs text-white/40 font-medium">Temperature</span>
-              <span className="text-xs font-bold text-emerald-400">23°C (Comfort)</span>
+              <div className="flex items-center gap-2">
+                <Battery size={14} className="text-white/40" />
+                <span className="text-xs text-white/40 font-medium">电池电量</span>
+              </div>
+              <span className="text-xs font-bold text-emerald-400">{deviceStatusData.battery}%</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-xs text-white/40 font-medium">Humidity</span>
-              <span className="text-xs font-bold text-blue-400">55% (Ideal)</span>
+              <div className="flex items-center gap-2">
+                <RefreshCw size={14} className="text-white/40" />
+                <span className="text-xs text-white/40 font-medium">采样频率</span>
+              </div>
+              <span className="text-xs font-bold text-blue-400">{deviceStatusData.samplingRate}Hz</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-xs text-white/40 font-medium">Noise Level</span>
-              <span className="text-xs font-bold text-yellow-400">35dB (Quiet)</span>
+              <div className="flex items-center gap-2">
+                <Zap size={14} className="text-white/40" />
+                <span className="text-xs text-white/40 font-medium">传输延迟</span>
+              </div>
+              <span className="text-xs font-bold text-yellow-400">{deviceStatusData.latency}ms</span>
+            </div>
+            <div className="flex justify-between items-center border-t border-white/5 pt-3 mt-1">
+              <div className="flex items-center gap-2">
+                <Timer size={14} className="text-white/40" />
+                <span className="text-xs text-white/40 font-medium">监测时长</span>
+              </div>
+              <span className={`text-xs font-bold ${isMonitoring ? theme.accent : 'text-white/20'}`}>
+                {formatTime(monitorTime)}
+              </span>
             </div>
           </div>
         </MemoizedGlassCard>

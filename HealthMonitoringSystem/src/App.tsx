@@ -8,7 +8,7 @@ import { Gateway } from './components/Gateway';
 import { UnifiedBentoDashboard } from './components/UnifiedBentoDashboard';
 import { BluetoothControl } from './components/BluetoothControl';
 import { GlassCard } from './components/ui/GlassCard';
-import { Eye, Moon, Car, Home, Settings, HelpCircle, Bluetooth } from 'lucide-react';
+import { Eye, Moon, Car, Home, Settings, HelpCircle, Bluetooth, Power } from 'lucide-react';
 import { useDynamicWebSocket, ModuleType } from './hooks/useDynamicWebSocket';
 import { mapModuleData, UnifiedMetricData } from './services/dataMapper';
 import { bluetoothService, BluetoothSensorData } from './services/bluetoothService';
@@ -78,6 +78,32 @@ export default function App() {
   const [moduleData, setModuleData] = useState<UnifiedMetricData | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [isBluetoothConnected, setIsBluetoothConnected] = useState(false);
+
+  // 新增：监测控制状态
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [monitorTime, setMonitorTime] = useState(0); // 单位：秒
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 监测时长计时器逻辑
+  useEffect(() => {
+    if (isMonitoring && (connectionStatus === 'connected' && isBluetoothConnected)) {
+      timerRef.current = setInterval(() => {
+        setMonitorTime(prev => prev + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isMonitoring, connectionStatus, isBluetoothConnected]);
+
+  // 当连接断开时，自动停止监测
+  useEffect(() => {
+    if (!(connectionStatus === 'connected' && isBluetoothConnected)) {
+      setIsMonitoring(false);
+    }
+  }, [connectionStatus, isBluetoothConnected]);
 
   // 节流控制引用
   const lastSendTimeRef = useRef<number>(0);
@@ -367,6 +393,18 @@ export default function App() {
             <div className="h-8 w-[1px] bg-white/10 mx-2" />
 
             <button
+              onClick={() => (connectionStatus === 'connected' && isBluetoothConnected) && setIsMonitoring(!isMonitoring)}
+              className={`p-2 rounded-xl transition-all border group ${
+                !(connectionStatus === 'connected' && isBluetoothConnected) ? 'bg-white/5 text-white/10 border-white/5 cursor-not-allowed' :
+                isMonitoring ? 'bg-red-500/20 text-red-400 border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : 
+                'bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30'
+              }`}
+              title={!(connectionStatus === 'connected' && isBluetoothConnected) ? "请先连接蓝牙设备" : isMonitoring ? "停止监测" : "开始监测"}
+            >
+              <Power size={18} />
+            </button>
+
+            <button
               onClick={toggleBluetoothModal}
               className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5 relative group"
             >
@@ -401,6 +439,9 @@ export default function App() {
               ? 'connected' 
               : (connectionStatus === 'error' ? 'error' : 'connecting')
           }
+          isMonitoring={isMonitoring}
+          onToggleMonitoring={() => setIsMonitoring(!isMonitoring)}
+          monitorTime={monitorTime}
         />
       </main>
 
