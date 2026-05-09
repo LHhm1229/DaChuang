@@ -43,15 +43,15 @@ def to_jsonable(obj):
 # =========================
 # 数据缓冲区（使用统一模块）
 # =========================
-SLEEP_WINDOW_SECONDS = 30
+SLEEP_WINDOW_SECONDS = 60
 SAMPLING_RATE = 100
 
 data_buffer = DataBuffer(
     config=BufferConfig(
-        max_size=1000,
+        max_size=2000,
         window_seconds=SLEEP_WINDOW_SECONDS,
         sampling_rate=SAMPLING_RATE,
-        min_samples=50
+        min_samples=100
     )
 )
 

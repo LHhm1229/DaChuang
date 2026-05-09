@@ -242,7 +242,8 @@ def analyze_sleep_from_eyelid_sensor(
     time_axis = np.linspace(0, total_duration, len(normalized))
 
     epoch_samples = epoch_duration_sec * sampling_rate
-    n_epochs = len(normalized) // epoch_samples
+    # 确保至少有 1 个 epoch，即使数据不足 30s 也可以进行初步分析
+    n_epochs = max(1, len(normalized) // epoch_samples)
 
     stage_sequence = []
     epoch_features_list = []
@@ -250,7 +251,12 @@ def analyze_sleep_from_eyelid_sensor(
     prev_stage = None
     for i in range(n_epochs):
         start_idx = i * epoch_samples
-        end_idx = start_idx + epoch_samples
+        end_idx = min(start_idx + epoch_samples, len(normalized))
+        
+        # 如果最后一个 epoch 太短（不足 5s），跳过
+        if end_idx - start_idx < 5 * sampling_rate and i > 0:
+            continue
+            
         epoch_sig = normalized[start_idx:end_idx]
         epoch_t = time_axis[start_idx:end_idx]
 
@@ -274,6 +280,18 @@ def run_sleep_quality_pipeline(
 
     epoch_duration_sec = 30
     n_epochs = len(stage_sequence)
+    
+    if n_epochs == 0:
+        return {
+            "qualityScore": 50,
+            "currentStage": 2,
+            "currentStageName": "浅睡N2",
+            "sleepEfficiency": 0,
+            "rem_density": 0,
+            "sem_count": 0,
+            "signal_std": 0
+        }
+
     total_minutes = n_epochs * epoch_duration_sec / 60.0
 
     wake_epochs = int(np.sum(stage_sequence == 0))
@@ -288,105 +306,68 @@ def run_sleep_quality_pipeline(
     tst_min = to_minutes(n1_epochs + n2_epochs + n3_epochs + rem_epochs)
     se = (tst_min / total_minutes * 100) if total_minutes > 0 else 0.0
 
-    current_stage = int(stage_sequence[-1]) if len(stage_sequence) > 0 else None
-    
-    # 基于整个睡眠周期计算综合评分
-    # 考虑因素：阶段分布、睡眠效率、REM比例、信号稳定性
+    current_stage = int(stage_sequence[-1]) if len(stage_sequence) > 0 else 2
     
     # 基础阶段分数
     stage_scores = {
-        0: 20,   # 清醒 - 最低分
-        1: 45,   # 浅睡N1 - 中低分
-        2: 60,   # 浅睡N2 - 中分
-        4: 75,   # REM - 中高分
-        3: 85    # 深睡 - 最高分
+        0: 20,   # 清醒
+        1: 45,   # 浅睡N1
+        2: 65,   # 浅睡N2
+        4: 80,   # REM
+        3: 95    # 深睡
     }
     
-    # 计算整体睡眠阶段分布分数
-    if n_epochs > 0:
-        # 各阶段权重
-        stage_weights = {
-            0: 0.3,   # 清醒权重较低
-            1: 0.5,   # 浅睡N1
-            2: 0.7,   # 浅睡N2
-            4: 0.85,  # REM
-            3: 0.95   # 深睡权重最高
-        }
-        
-        # 计算加权平均阶段分数
-        weighted_score = 0
-        total_weight = 0
-        for stage, weight in stage_weights.items():
-            count = int(np.sum(stage_sequence == stage))
-            weighted_score += count * weight * 100
-            total_weight += count * weight
-        
-        if total_weight > 0:
-            stage_based_score = weighted_score / total_weight
-        else:
-            stage_based_score = 50
-        
-        # 结合当前阶段
-        current_stage_score = stage_scores.get(current_stage, 50)
-        base_score = (stage_based_score * 0.7 + current_stage_score * 0.3)
-        
-        # 考虑睡眠效率
-        efficiency_bonus = min(se / 100, 1.0) * 15
-        base_score += efficiency_bonus
-        
-        # REM比例奖励（REM占比15-25%为最佳）
-        rem_ratio = rem_epochs / n_epochs if n_epochs > 0 else 0
-        optimal_rem_ratio = 0.2  # 最佳REM比例
-        rem_score = 100 - abs(rem_ratio - optimal_rem_ratio) / optimal_rem_ratio * 50
-        rem_bonus = rem_score / 100 * 10
-        base_score += rem_bonus
-        
-        # 添加随机波动（±5分）使评分更真实
-        random_factor = np.random.uniform(-5, 5)
-        score = base_score + random_factor
-        
-        # 限制在0-100范围内
-        score = max(10, min(95, score))
-    else:
-        # 如果没有足够数据，使用当前阶段分数
-        score = stage_scores.get(current_stage, 50) + np.random.uniform(-3, 3)
+    # 各阶段权重
+    stage_weights = {
+        0: 0.3,
+        1: 0.5,
+        2: 0.7,
+        4: 0.85,
+        3: 0.95
+    }
+    
+    # 计算加权平均阶段分数
+    weighted_sum = 0
+    total_weight = 0
+    for stage, weight in stage_weights.items():
+        count = int(np.sum(stage_sequence == stage))
+        weighted_sum += count * weight * 100
+        total_weight += count * weight
+    
+    stage_based_score = weighted_sum / total_weight if total_weight > 0 else 60
+    
+    # 结合当前阶段
+    current_stage_score = stage_scores.get(current_stage, 60)
+    base_score = (stage_based_score * 0.6 + current_stage_score * 0.4)
+    
+    # 考虑睡眠效率
+    efficiency_bonus = min(se / 100, 1.0) * 10
+    base_score += efficiency_bonus
+    
+    # REM比例奖励
+    rem_ratio = rem_epochs / n_epochs if n_epochs > 0 else 0
+    optimal_rem_ratio = 0.2
+    rem_score = 100 - abs(rem_ratio - optimal_rem_ratio) / 0.2 * 50
+    rem_bonus = max(0, rem_score / 100 * 5)
+    base_score += rem_bonus
+    
+    # 限制在 10-100 范围内
+    score = max(10, min(100, base_score))
+    
+    # 获取最后一个 epoch 的特征用于输出
+    last_feats = epoch_features_list[-1] if epoch_features_list else {}
+    
     stage_names = {0: "清醒", 1: "浅睡N1", 2: "浅睡N2", 3: "深睡", 4: "REM"}
 
-    result = {
-        "totalMinutes": round(total_minutes, 1),
-        "tstMinutes": round(tst_min, 1),
-        "sleepEfficiency": round(se, 1),
-        "qualityScore": round(score, 1),
+    return {
+        "qualityScore": round(score),
         "currentStage": current_stage,
         "currentStageName": stage_names.get(current_stage, "未知"),
-        "stageSequence": stage_sequence.tolist(),
-        "stageDurations": {
-            "wake": round(to_minutes(wake_epochs), 1),
-            "n1": round(to_minutes(n1_epochs), 1),
-            "n2": round(to_minutes(n2_epochs), 1),
-            "n3": round(to_minutes(n3_epochs), 1),
-            "rem": round(to_minutes(rem_epochs), 1)
-        },
-        "stagePercentages": {
-            "wake": round(wake_epochs / n_epochs * 100, 1) if n_epochs > 0 else 0,
-            "n1": round(n1_epochs / n_epochs * 100, 1) if n_epochs > 0 else 0,
-            "n2": round(n2_epochs / n_epochs * 100, 1) if n_epochs > 0 else 0,
-            "n3": round(n3_epochs / n_epochs * 100, 1) if n_epochs > 0 else 0,
-            "rem": round(rem_epochs / n_epochs * 100, 1) if n_epochs > 0 else 0,
-        }
+        "sleepEfficiency": round(se, 1),
+        "rem_density": round(last_feats.get('rem_density', 0), 2),
+        "sem_count": last_feats.get('sem_count', 0),
+        "signal_std": round(last_feats.get('signal_std', 0), 4),
+        "totalMinutes": round(total_minutes, 1),
+        "tstMinutes": round(tst_min, 1),
+        "stageSequence": stage_sequence.tolist()
     }
-    
-    if epoch_features_list:
-        latest_feats = epoch_features_list[-1]
-        result.update({
-            "rem_density": round(latest_feats.get("rem_density", 0), 2),
-            "sem_count": latest_feats.get("sem_count", 0),
-            "rem_energy": round(latest_feats.get("rem_energy", 0), 2),
-            "sem_energy": round(latest_feats.get("sem_energy", 0), 2),
-            "rem_sem_ratio": round(latest_feats.get("rem_sem_ratio", 0), 2),
-            "signal_std": round(latest_feats.get("signal_std", 0), 4)
-        })
-    
-    print(f"[METRICS] 睡眠指标 | score={result['qualityScore']} | stage={result['currentStageName']} | efficiency={result['sleepEfficiency']}% | rem_density={result.get('rem_density', 0)} | sem_count={result.get('sem_count', 0)}")
-    
-    return result
