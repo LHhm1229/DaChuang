@@ -268,8 +268,6 @@ export default function App() {
 
   // 处理蓝牙数据接收 - 发送到后端（使用节流 Throttling）
   const handleBluetoothDataReceived = useCallback((data: any) => {
-    console.log('[App] 蓝牙数据接收(原始):', data);
-    
     const now = Date.now();
     // 节流处理：每 500ms 最多发送一次数据
     if (now - lastSendTimeRef.current < 500) {
@@ -277,7 +275,6 @@ export default function App() {
     }
 
     lastSendTimeRef.current = now;
-    console.log('[App] 节流后发送数据');
 
     const port = MODULE_PORT_MAP[currentModuleType] || 3002;
     const fullUrl = `http://localhost:${port}/api/bluetooth-data`;

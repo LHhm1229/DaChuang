@@ -66,8 +66,12 @@ class DataBuffer:
         return False
 
     def can_compute(self) -> bool:
-        """是否有足够数据进行计算"""
-        return len(self.signal_buffer) >= self.config.min_samples
+        """是否有足够数据进行计算（带冷却：每 window_seconds 最多触发一次）"""
+        if len(self.signal_buffer) < self.config.min_samples:
+            return False
+        if self.last_compute_time is None:
+            return True
+        return (time.time() - self.last_compute_time) >= self.config.window_seconds
 
     def get_signal_array(self) -> np.ndarray:
         """获取信号数据数组"""

@@ -102,7 +102,6 @@ class BluetoothService {
   }
 
   private notifyListeners(data: BluetoothSensorData): void {
-    console.log(`[BluetoothService] 通知 ${this.listeners.length} 个监听器`);
     this.listeners.forEach(listener => listener(data));
   }
 
@@ -129,6 +128,13 @@ class BluetoothService {
         optionalServices: ['0000fff1-0000-1000-8000-00805f9b34fb']
       });
 
+      // 监听 BLE 断连事件，避免 UI 一直显示 CONNECTED
+      device.addEventListener('gattserverdisconnected', () => {
+        console.log('[BluetoothService] BLE 连接断开');
+        this.deviceInfo = null;
+        this.notifyConnection(false);
+      });
+
       const server = await device.gatt?.connect();
       if (!server) {
         throw new Error('无法连接GATT服务器');
@@ -144,43 +150,25 @@ class BluetoothService {
           if (!value) return;
 
           const dataArray = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-          
-          // 调试：打印原始16进制数据
-          const hexDebug: string[] = [];
-          for (let i = 0; i < Math.min(dataArray.length, 20); i++) {
-            hexDebug.push(dataArray[i].toString(16).padStart(2, '0').toUpperCase());
-          }
-          console.log(`[Bluetooth] 原始16进制数据 (前${hexDebug.length}字节): ${hexDebug.join(' ')}`);
-          console.log(`[Bluetooth] 字节数组长度: ${dataArray.length}`);
-          
-          // 解析16进制字节数据为浮点数数组
-          // 假设每4字节组成一个float32（小端序）
           const floatValues: number[] = [];
-          
+
           if (dataArray.length >= 4) {
             for (let i = 0; i < dataArray.length; i += 4) {
               if (i + 4 <= dataArray.length) {
                 const view = new DataView(dataArray.buffer, dataArray.byteOffset + i, 4);
                 const floatVal = view.getFloat32(0, true);
-                
                 if (isFinite(floatVal)) {
                   floatValues.push(floatVal);
-                } else {
-                  console.warn(`[Bluetooth] 无效浮点数 at index ${i}: ${floatVal}, hex: ${hexDebug.slice(i, i+4).join(' ')}`);
                 }
               }
             }
           }
-          
-          // 如果解析float32失败或数据不符合，尝试将每个字节作为0-255的原始值
+
           if (floatValues.length === 0 && dataArray.length > 0) {
-            console.log('[Bluetooth] 使用原始字节值作为数据');
             for (let i = 0; i < dataArray.length; i++) {
               floatValues.push(dataArray[i] / 255.0);
             }
           }
-          
-          console.log(`[Bluetooth] 解析后数据: ${floatValues.slice(0, 5).map(v => v.toFixed(4)).join(', ')}...`);
           
           const sensorData: BluetoothSensorData = {
             values: floatValues,
