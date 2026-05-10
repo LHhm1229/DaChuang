@@ -102,7 +102,7 @@ export const useDataService = (module: 'dry-eye' | 'sleep' | 'fatigue') => {
   );
 
   useEffect(() => {
-    const wsUrl = `ws://localhost:${module === 'dry-eye' ? 3000 : module === 'sleep' ? 3001 : 3002}/ws`;
+    const wsUrl = `ws://localhost:${module === 'dry-eye' ? 3001 : module === 'sleep' ? 3003 : 3002}/ws`;
     
     wsService.connect(wsUrl);
     setIsConnected(true);

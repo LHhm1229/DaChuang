@@ -21,14 +21,14 @@ const MODULE_CONFIG = {
     title: '干眼症监测',
     icon: Eye,
     color: 'primary-dryeye',
-    port: 3000,
+    port: 3001,
     wsType: 'dryEye'
   },
   'sleep': {
     title: '睡眠质量检测',
     icon: Moon,
     color: 'primary-sleep',
-    port: 3001,
+    port: 3003,
     wsType: 'sleepQuality'
   },
   'fatigue': {
@@ -44,8 +44,8 @@ const MODULE_CONFIG = {
 // 端口映射
 // =========================
 const MODULE_PORT_MAP: Record<ModuleType, number> = {
-  'dry-eye': 3000,
-  'sleep': 3001,
+  'dry-eye': 3001,
+  'sleep': 3003,
   'fatigue': 3002
 };
 

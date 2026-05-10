@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import json
 import time
 from datetime import datetime
@@ -11,7 +14,7 @@ from algorithm.blink_fatigue import run_fatigue_pipeline
 from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
-CORS(app)  # 允许所有来源跨域
+CORS(app, origins="*")
 socketio = SocketIO(app, 
                    async_mode='eventlet',
                    ping_interval=25,

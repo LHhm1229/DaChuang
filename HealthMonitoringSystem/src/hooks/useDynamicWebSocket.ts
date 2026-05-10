@@ -46,8 +46,8 @@ export interface UseDynamicWebSocketReturn {
 // 端口映射配置
 // =========================
 const MODULE_PORT_MAP: Record<ModuleType, number> = {
-  'dry-eye': 3000,
-  'sleep': 3001,
+  'dry-eye': 3001,
+  'sleep': 3003,
   'fatigue': 3002
 };
 

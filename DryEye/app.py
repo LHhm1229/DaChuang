@@ -256,7 +256,7 @@ def clear_buffer():
     })
 
 if __name__ == '__main__':
-    PORT = 3000
+    PORT = 3001
     print("[服务器] 干眼症后端服务启动中...")
     print(f"   访问地址: http://localhost:{PORT}")
     print(f"   WebSocket: http://localhost:{PORT}/socket.io")

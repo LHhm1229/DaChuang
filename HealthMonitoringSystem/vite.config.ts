@@ -13,12 +13,12 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/bluetooth-data-fatigue/, '/api/bluetooth-data')
       },
       '/api/bluetooth-data-sleep': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3003',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/bluetooth-data-sleep/, '/api/bluetooth-data')
       },
       '/api/bluetooth-data': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3001',
         changeOrigin: true,
       },
       '/api/fatigue': {
@@ -27,23 +27,23 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/fatigue/, '')
       },
       '/api/sleep': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3003',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/sleep/, '')
       },
       '/api/dry-eye': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/dry-eye/, '')
       },
       '/ws/dry-eye': {
-        target: 'ws://localhost:3000',
+        target: 'ws://localhost:3001',
         ws: true,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ws\/dry-eye/, '/ws')
       },
       '/ws/sleep': {
-        target: 'ws://localhost:3001',
+        target: 'ws://localhost:3003',
         ws: true,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ws\/sleep/, '/ws')
