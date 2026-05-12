@@ -44,6 +44,7 @@ def to_jsonable(obj):
 # 数据缓冲区（使用统一模块）
 # =========================
 FATIGUE_WINDOW_SECONDS = 30
+CALIBRATION_DURATION_SECONDS = 6
 SAMPLING_RATE = 100
 
 data_buffer = DataBuffer(
@@ -229,7 +230,8 @@ def receive_bluetooth_data():
                         raw_signal=raw_np,
                         sampling_rate=SAMPLING_RATE,
                         driving_time=driving_time_str,
-                        battery_level=None
+                        battery_level=None,
+                        calibration_duration_sec=CALIBRATION_DURATION_SECONDS
                     )
                     fatigue_output = to_jsonable(fatigue_output)
                     last_fatigue_output = fatigue_output

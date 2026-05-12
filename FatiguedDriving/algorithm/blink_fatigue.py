@@ -758,50 +758,103 @@ def assess_fatigue(
 # =========================
 class FatiguePipelineState:
     """
-    滑动窗口状态缓存（改进点6）
+    滑动窗口状态缓存 + 初始校准机制
     用于解决"冷启动"问题，只保留最近60s的有效数据
+    支持初始校准：启动后先采集一段时间建立个人基准
     """
-    def __init__(self, window_size_sec: float = 60.0, sampling_rate: int = 100):
+    def __init__(
+        self,
+        window_size_sec: float = 60.0,
+        sampling_rate: int = 100,
+        calibration_duration_sec: float = 30.0
+    ):
         self.window_size_sec = window_size_sec
         self.window_size_samples = int(window_size_sec * sampling_rate)
         self.sampling_rate = sampling_rate
         self.buffer: List[float] = []
         self.timestamp_buffer: List[float] = []
+
+        self.calibration_duration_sec = calibration_duration_sec
+        self.is_calibrating = True
+        self.calibration_samples: List[float] = []
+        self.calibration_complete = False
+
         self.personal_baseline = {
             "avg_blink_duration": 0.15,
             "std_blink_duration": 0.05,
-            "sample_count": 0
+            "sample_count": 0,
+            "calibrated": False
         }
-    
+
     def update(self, new_samples: np.ndarray, timestamps: np.ndarray = None):
         """更新滑动窗口缓冲区"""
+        if self.is_calibrating:
+            self.calibration_samples.extend(new_samples.tolist())
+            calibration_samples_count = len(self.calibration_samples)
+            calibration_duration = calibration_samples_count / self.sampling_rate
+
+            if calibration_duration >= self.calibration_duration_sec:
+                self._complete_calibration()
+
         self.buffer.extend(new_samples.tolist())
         if timestamps is not None:
             self.timestamp_buffer.extend(timestamps.tolist())
-        
-        # 保持窗口大小
+
         if len(self.buffer) > self.window_size_samples:
             excess = len(self.buffer) - self.window_size_samples
             self.buffer = self.buffer[excess:]
             if timestamps is not None:
                 self.timestamp_buffer = self.timestamp_buffer[excess:]
+
+    def _complete_calibration(self):
+        """完成校准，基于校准期间的数据建立个人基准"""
+        if self.calibration_complete:
+            return
+
+        calibration_data = np.array(self.calibration_samples, dtype=float)
+        if calibration_data.size < 100:
+            print("[ALGO] 校准数据不足，延迟校准")
+            return
+
+        self.is_calibrating = False
+        self.calibration_complete = True
+
+        mean_duration = float(np.mean(calibration_data))
+        std_duration = float(np.std(calibration_data))
+
+        self.personal_baseline = {
+            "avg_blink_duration": 0.15,
+            "std_blink_duration": 0.05,
+            "sample_count": 0,
+            "calibrated": True,
+            "calibration_samples_count": len(self.calibration_samples),
+            "calibration_duration_sec": len(self.calibration_samples) / self.sampling_rate,
+            "baseline_mean": mean_duration,
+            "baseline_std": std_duration
+        }
+        print(f"[ALGO] 校准完成！采集了 {len(self.calibration_samples)} 个样本 ({self.personal_baseline['calibration_duration_sec']:.1f}秒)")
+        print(f"[ALGO] 个人基准: avg_duration={self.personal_baseline['avg_blink_duration']*1000:.1f}ms, std={self.personal_baseline['std_blink_duration']*1000:.1f}ms")
     
     def get_valid_window(self) -> Tuple[np.ndarray, float]:
         """
         获取有效窗口数据
+        校准期间返回校准数据，用于建立初始基准
         返回：(窗口数据, 窗口时长秒)
         """
+        if self.is_calibrating:
+            calibration_data = np.array(self.calibration_samples, dtype=float)
+            return calibration_data, len(calibration_data) / self.sampling_rate
+
         if len(self.buffer) < 10:
             return np.array([]), 0.0
-        
+
         window_data = np.array(self.buffer)
         window_duration = len(window_data) / self.sampling_rate
-        
-        # 检测数据有效率
+
         valid_ratio = len(window_data) / self.window_size_samples
         if valid_ratio < 0.5:
             print(f"[ALGO] 警告：数据有效率仅 {valid_ratio*100:.1f}%，可能传感器不稳定")
-        
+
         return window_data, window_duration
     
     def compute_data_quality(self) -> float:
@@ -833,7 +886,8 @@ def run_fatigue_pipeline(
     driving_time: str = "0小时0分钟",
     battery_level: Optional[float] = None,
     use_sliding_window: bool = True,
-    window_size_sec: float = 60.0
+    window_size_sec: float = 60.0,
+    calibration_duration_sec: float = 30.0
 ) -> Dict:
     """
     app.py 调用推荐入口
@@ -842,6 +896,7 @@ def run_fatigue_pipeline(
     2) 使用 Mask 机制替代信号填充
     3) 施密特触发器判断眼睛状态
     4) 滑动窗口缓存解决冷启动问题
+    5) 初始校准机制：启动后先采集一段时间建立个人基准
     """
     global _fatigue_state
     
@@ -850,7 +905,7 @@ def run_fatigue_pipeline(
     # 初始化或更新滑动窗口状态
     if use_sliding_window:
         if _fatigue_state is None or _fatigue_state.sampling_rate != sampling_rate:
-            _fatigue_state = FatiguePipelineState(window_size_sec, sampling_rate)
+            _fatigue_state = FatiguePipelineState(window_size_sec, sampling_rate, calibration_duration_sec)
         
         _fatigue_state.update(raw_np)
         window_data, window_duration = _fatigue_state.get_valid_window()
@@ -945,6 +1000,8 @@ def run_fatigue_pipeline(
     output["debug"]["totalCloseTime"] = total_close_time / sampling_rate
     output["debug"]["dataQuality"] = _fatigue_state.compute_data_quality() if use_sliding_window and _fatigue_state else 1.0
     output["debug"]["personalBaselineMs"] = round(personal_baseline["avg_blink_duration"] * 1000, 1) if personal_baseline else 150.0
+    output["debug"]["isCalibrating"] = _fatigue_state.is_calibrating if use_sliding_window and _fatigue_state else False
+    output["debug"]["calibrationComplete"] = _fatigue_state.calibration_complete if use_sliding_window and _fatigue_state else True
 
     return output
 
