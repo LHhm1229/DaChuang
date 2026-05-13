@@ -80,36 +80,45 @@ def preprocess_eyelid_signal(
     sampling_rate: int = 100,
     drift_window_sec: float = 2.0,
     smooth_cutoff_hz: float = 3.5,
-    normalize: bool = False
+    normalize: bool = False,
+    enhance_signal: bool = True
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     新版预处理（改进点）：
     1) 增加中值滤波去除脉冲噪声
     2) 降低低通滤波截止频率至 3.5Hz（眨眼主能级通常低于 4Hz）
     3) 增加无信号检测
+    4) 增加自适应信号增强，放大微小电压变化
     """
     x = np.asarray(raw_signal, dtype=float)
     if x.ndim != 1 or x.size < max(50, sampling_rate):
         centered = x - np.mean(x) if x.size > 0 else x
         return centered, centered, centered
 
-    # 0) 无信号检测：如果幅值过小，判定为无信号/传感器未佩戴
     signal_range = float(np.max(x) - np.min(x))
     physical_min_threshold = 0.01
     if signal_range < physical_min_threshold:
         print("[ALGO] 警告：信号幅值过小，可能是传感器未佩戴或无信号")
         return np.zeros_like(x), np.zeros_like(x), np.zeros_like(x)
 
-    # 1) 去直流
+    # 自适应信号增强：放大微小变化
+    if enhance_signal:
+        # 计算信号标准差，评估信号活跃程度
+        signal_std = float(np.std(x))
+        target_std = 0.15  # 目标标准差，让信号有足够动态范围
+        
+        if signal_std > 0 and signal_std < target_std:
+            gain_factor = min(target_std / signal_std, 10.0)  # 最大放大10倍
+            x = x * gain_factor
+            print(f"[ALGO] 信号增强: 标准差 {signal_std:.4f} -> 放大 {gain_factor:.2f} 倍")
+
     centered_signal = x - np.mean(x)
 
-    # 2) 中值滤波去除脉冲噪声
     median_window = max(3, int(sampling_rate * 0.01))
     if median_window % 2 == 0:
         median_window += 1
     centered_signal = median_filter(centered_signal, size=median_window)
 
-    # 3) 大窗口形态学估计基线漂移
     size_drift = int(max(3, round(drift_window_sec * sampling_rate)))
 
     trend_open = grey_opening(centered_signal, size=size_drift)
@@ -117,7 +126,6 @@ def preprocess_eyelid_signal(
 
     baseline_removed = centered_signal - trend_base
 
-    # 4) 低通滤波
     nyquist = sampling_rate / 2.0
     cutoff = smooth_cutoff_hz / nyquist
     cutoff = float(min(max(cutoff, 1e-6), 0.999999))
@@ -125,12 +133,17 @@ def preprocess_eyelid_signal(
     b, a = signal.butter(8, cutoff, "lowpass")
     filtered_signal = signal.filtfilt(b, a, baseline_removed)
 
-    # 5) 可选归一化到 [0,1]
     if normalize:
         min_val = float(np.min(filtered_signal))
         max_val = float(np.max(filtered_signal))
-        if max_val - min_val > 1e-4:
-            normalized_signal = (filtered_signal - min_val) / (max_val - min_val)
+        range_val = max_val - min_val
+        
+        if range_val > 1e-4:
+            # 改进归一化：增加对比度拉伸
+            normalized_signal = (filtered_signal - min_val) / range_val
+            # 应用伽马校正，增强中间区域的对比度
+            gamma = 0.8
+            normalized_signal = np.power(normalized_signal, gamma)
         else:
             normalized_signal = filtered_signal.copy()
     else:
@@ -152,7 +165,8 @@ def adaptive_preprocess_eyelid_signal(
         sampling_rate=sampling_rate,
         drift_window_sec=2.0,
         smooth_cutoff_hz=3.5,
-        normalize=True
+        normalize=True,
+        enhance_signal=True
     )
 
 
@@ -216,9 +230,9 @@ def extract_blink_features(
     # 2) 峰值检测参数
     min_peak_distance = max(1, int(min_peak_distance_sec * sampling_rate))
     
-    # 动态高度阈值
-    dynamic_threshold = _compute_physical_threshold(x, factor=1.5)
-    height_threshold = float(np.clip(dynamic_threshold, 0.3, 0.7))
+    # 动态高度阈值 - 降低灵敏度阈值以检测微小变化
+    dynamic_threshold = _compute_physical_threshold(x, factor=1.0)  # 降低factor提高灵敏度
+    height_threshold = float(np.clip(dynamic_threshold, 0.2, 0.6))  # 降低阈值范围
     
     # 峰宽度约束
     min_width_samples = max(5, int(0.05 * sampling_rate))
