@@ -81,6 +81,8 @@ def generate_eyelid_blink_signal(base_voltage, duration_sec, blink_config=None):
                 else:
                     signal[k] = blink_voltage
     
+    # 强制截断到传感器物理范围 [0, 3.3V]
+    signal = np.clip(signal, 0.0, 3.3)
     return signal.tolist()
 
 def send_bluetooth_data(signal_data, timestamp=None):
@@ -88,15 +90,19 @@ def send_bluetooth_data(signal_data, timestamp=None):
         "rawData": signal_data,
         "timestamp": timestamp or int(time.time() * 1000),
         "signalQuality": 95,
-        "values": signal_data
     }
-    
+
     try:
         response = requests.post(SERVER_URL, json=data, timeout=5)
         if response.status_code == 200:
             return True
+        print(f"  [!] 服务器返回错误: {response.status_code} - {response.text[:200]}")
         return False
-    except:
+    except requests.exceptions.ConnectionError:
+        print(f"  [!] 连接失败: {SERVER_URL} 无法访问，请确认后端已启动")
+        return False
+    except Exception as e:
+        print(f"  [!] 发送异常: {e}")
         return False
 
 def simulate_continuous(name, voltage_sequence, duration_sec=15):
@@ -126,17 +132,32 @@ def simulate_blinks(name, base_voltage, duration_sec, blink_sequence):
     """眨眼模式模拟"""
     print(f"\n{'='*50}")
     print(f"场景: {name}")
+    print(f"基线电压: {base_voltage:.2f}V | 时长: {duration_sec}s | 眨眼次数: {len(blink_sequence)}")
     print(f"{'='*50}")
-    
-    signal = generate_eyelid_blink_signal(base_voltage, duration_sec, blink_sequence)
-    
+
+    signal_data = generate_eyelid_blink_signal(base_voltage, duration_sec, blink_sequence)
+    print(f"总样本数: {len(signal_data)}, 电压范围: [{min(signal_data):.3f}V, {max(signal_data):.3f}V]")
+
+    # 标出每个眨眼发生的秒数，便于对照
+    blink_times = {int(t): f"{d*1000:.0f}ms" for t, d, _ in blink_sequence}
+
     batch_size = SAMPLING_RATE
-    for i in range(0, len(signal), batch_size):
-        batch = signal[i:i+batch_size]
-        send_bluetooth_data(batch)
+    success_count = 0
+    for i in range(0, len(signal_data), batch_size):
+        batch = signal_data[i:i+batch_size]
+        current_sec = i // SAMPLING_RATE
+        current_voltage = batch[len(batch)//2]
+
+        blink_hint = f" <-- 眨眼({blink_times[current_sec]})" if current_sec in blink_times else ""
+        ok = send_bluetooth_data(batch)
+        status = "✓" if ok else "✗"
+        print(f"  {status} t={current_sec:3d}s | 电压: {current_voltage:.3f}V{blink_hint}", end='\r')
+        if ok:
+            success_count += 1
         time.sleep(0.95)
-    
-    print(f"\n✓ 场景完成")
+
+    total_batches = len(range(0, len(signal_data), batch_size))
+    print(f"\n✓ 场景完成 | 发送成功: {success_count}/{total_batches} 批")
 
 def main():
     print("蓝牙数据模拟器")
@@ -169,9 +190,10 @@ def main():
     print("1) 连续电压变化 (1.0→1.3→2.3→3.3→1.2)")
     print("2) 连续电压变化 (1.0→2.0→3.0→1.5)")
     print("3) 眨眼模式 (睁眼基线1.0V + 眨眼)")
-    print("4) 疲劳眨眼模式 (眨眼频率增加/时长增加)")
+    print("4) 疲劳眨眼模式 (眨眼频率增加/时长增加) [推荐用于测试疲劳评分]")
+    print("5) 快速全链路测试 (自动运行10秒正常+10秒疲劳)")
     
-    choice = input("\n选择 (1-4): ").strip()
+    choice = input("\n选择 (1-5): ").strip()
     
     if choice == "1":
         simulate_continuous("连续电压变化(用户指定)", scenario1, duration_sec=20)
@@ -190,6 +212,17 @@ def main():
             (13.0, 0.6, 3.2),
         ]
         simulate_blinks("疲劳眨眼模式", 1.0, 16, fatigue_blinks)
+    elif choice == "5":
+        normal_blinks = [
+            (1.0, 0.15, 2.5), (3.0, 0.15, 2.5), (5.0, 0.15, 2.5), (7.0, 0.15, 2.5), (9.0, 0.15, 2.5)
+        ]
+        fatigue_blinks = [
+            (1.0, 0.4, 2.8), (3.5, 0.5, 3.0), (6.0, 0.6, 3.2), (8.5, 0.7, 3.3)
+        ]
+        print("\n>>> 阶段1: 正常状态模拟 (10秒)")
+        simulate_blinks("正常状态", 1.0, 10, normal_blinks)
+        print("\n>>> 阶段2: 疲劳状态模拟 (10秒)")
+        simulate_blinks("疲劳状态", 1.0, 10, fatigue_blinks)
     else:
         print("无效选择")
 

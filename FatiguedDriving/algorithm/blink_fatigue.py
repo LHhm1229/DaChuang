@@ -884,7 +884,7 @@ class FatiguePipelineState:
         
         # 检查是否有足够的波动（而不是死寂）
         signal_var = float(np.var(x))
-        if signal_var < 0.001:
+        if signal_var < 0.0001:  # 降低阈值，从 0.001 降到 0.0001
             return 0.3  # 信号过于平稳
         
         return 1.0

@@ -21,14 +21,14 @@ const MODULE_CONFIG = {
     title: '干眼症监测',
     icon: Eye,
     color: 'primary-dryeye',
-    port: 3001,
+    port: 3000,
     wsType: 'dryEye'
   },
   'sleep': {
     title: '睡眠质量检测',
     icon: Moon,
     color: 'primary-sleep',
-    port: 3003,
+    port: 3001,
     wsType: 'sleepQuality'
   },
   'fatigue': {
@@ -44,8 +44,8 @@ const MODULE_CONFIG = {
 // 端口映射
 // =========================
 const MODULE_PORT_MAP: Record<ModuleType, number> = {
-  'dry-eye': 3001,
-  'sleep': 3003,
+  'dry-eye': 3000,
+  'sleep': 3001,
   'fatigue': 3002
 };
 
@@ -128,19 +128,27 @@ export default function App() {
 
     // 处理对应模块的数据
     if (msg.type === moduleConfig.wsType || msg.type === 'result') {
-      console.log(`[App] 处理结果数据 | type=${msg.type}`);
+      console.log(`[App] 收到算法计算结果 | type=${msg.type} | score=${msg.data?.fatigueScore || msg.data?.qualityScore || msg.data?.dryEyeRiskScore}`);
       const mappedData = mapModuleData(currentModuleType, msg.data);
       if (mappedData) {
         setModuleData(mappedData);
       }
     } else if (msg.type === 'bluetooth_data') {
-      // 只有当没有计算结果时，才使用原始蓝牙数据回显作为降级方案
-      // 或者如果你的逻辑需要实时显示原始波形，可以保留，但这里为了稳定 UI 做节流
-      console.log(`[App] 收到蓝牙回显，仅在无结果时更新`);
+      // 蓝牙原始数据仅用于更新信号质量，不覆盖算法结果
+      console.log(`[App] 收到蓝牙数据包 | n=${msg.data?.rawData?.length || 0}`);
       const mappedData = mapModuleData(currentModuleType, msg.data);
-      if (mappedData && (!moduleData || msg.type === 'bluetooth_data')) {
-        // 如果是蓝牙数据，我们只在没有主数据时更新，或者你可以选择直接忽略它以减少抖动
-        // setModuleData(mappedData); 
+      if (mappedData) {
+        // 如果当前没有主数据（初始状态），可以显示信号质量
+        setModuleData(prev => {
+          if (!prev || prev.mainValue === 0) {
+            return mappedData;
+          }
+          // 如果已有主数据，只更新信号质量和时间
+          return {
+            ...prev,
+            status: mappedData.status
+          };
+        });
       }
     } else if (msg.type === 'hello') {
       console.log(`[App] 收到欢迎消息:`, msg.data);

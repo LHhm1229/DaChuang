@@ -226,6 +226,7 @@ def receive_bluetooth_data():
                     minutes = (total_seconds % 3600) // 60
                     driving_time_str = f"{hours}小时{minutes}分钟"
                     
+                    print(f"[ALGO] 开始计算疲劳评分... 样本数: {raw_np.size}")
                     fatigue_output = run_fatigue_pipeline(
                         raw_signal=raw_np,
                         sampling_rate=SAMPLING_RATE,
@@ -240,12 +241,16 @@ def receive_bluetooth_data():
 
                     dt_ms = (time.time() - t0) * 1000.0
                     print(
-                        f"[ALGO] FATIGUE computed | n={raw_np.size} | cost={dt_ms:.1f}ms "
-                        f"| score={fatigue_output.get('fatigueScore')} "
-                        f"| blinkRate={fatigue_output.get('blinkRate')}"
+                        f"[ALGO] 疲劳计算完成 | 耗时={dt_ms:.1f}ms "
+                        f"| 评分={fatigue_output.get('fatigueScore')} "
+                        f"| 眨眼频率={fatigue_output.get('blinkRate')}"
                     )
+                else:
+                    print(f"[ALGO] 样本数不足，跳过计算: {raw_np.size}/{data_buffer.config.min_samples}")
         except Exception as fe:
+            import traceback
             print("[ALGO] 疲劳算法计算失败：", fe)
+            print(traceback.format_exc())
 
         broadcast_data(data_point)
 

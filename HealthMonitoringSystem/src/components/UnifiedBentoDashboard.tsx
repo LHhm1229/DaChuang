@@ -273,26 +273,31 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
 
   // 处理实时数据更新
   useEffect(() => {
-    if (data && isMonitoring && isConnected) {
+    // 调试日志
+    if (data) {
+      console.log(`[Dashboard] 收到数据更新 | 模块: ${module} | 主数值: ${data.mainValue} | 监测状态: ${isMonitoring} | 连接状态: ${isConnected}`);
+    }
+
+    // 只要有数据就更新数值（支持模拟器调试，不需要物理连接状态）
+    if (data) {
       setMainValue(data.mainValue as number);
       setSecondaryMetrics(data.secondaryMetrics);
       
-      // 只有在开启监测时才更新图表
-      setChartData(prev => {
-        const newPoint: ChartDataPoint = {
-          time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-          sleepScore: module === 'sleep' ? data.mainValue as number : (prev[prev.length-1]?.sleepScore as number || 75),
-          remDensity: module === 'sleep' ? parseFloat(data.secondaryMetrics[1]?.value as string) || 0 : (prev[prev.length-1]?.remDensity as number || 0.15),
-          fatigueScore: module === 'fatigue' ? data.mainValue as number : (prev[prev.length-1]?.fatigueScore as number || 45),
-          blinkDuration: module === 'fatigue' ? data.secondaryMetrics[1]?.value as number : (prev[prev.length-1]?.blinkDuration as number || 180),
-          blinkRate: module === 'dry-eye' ? data.secondaryMetrics[0]?.value as number : (prev[prev.length-1]?.blinkRate as number || 12),
-          dryEyeRisk: module === 'dry-eye' ? data.mainValue as number : (prev[prev.length-1]?.dryEyeRisk as number || 25),
-        };
-        return [...prev.slice(1), newPoint];
-      });
-    } else if (!isMonitoring) {
-      // 监测暂停时，保持当前值但不更新，或者你可以选择清空
-      // 为了让“不动了”的效果更明显，我们不清除数据，只是不让它跳动
+      // 只有在开启监测时才更新历史图表
+      if (isMonitoring || !isConnected) { // 模拟器模式下默认允许更新图表
+        setChartData(prev => {
+          const newPoint: ChartDataPoint = {
+            time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+            sleepScore: module === 'sleep' ? data.mainValue as number : (prev[prev.length-1]?.sleepScore as number || 75),
+            remDensity: module === 'sleep' ? parseFloat(data.secondaryMetrics[1]?.value as string) || 0 : (prev[prev.length-1]?.remDensity as number || 0.15),
+            fatigueScore: module === 'fatigue' ? data.mainValue as number : (prev[prev.length-1]?.fatigueScore as number || 45),
+            blinkDuration: module === 'fatigue' ? data.secondaryMetrics[1]?.value as number : (prev[prev.length-1]?.blinkDuration as number || 180),
+            blinkRate: module === 'dry-eye' ? data.secondaryMetrics[0]?.value as number : (prev[prev.length-1]?.blinkRate as number || 12),
+            dryEyeRisk: module === 'dry-eye' ? data.mainValue as number : (prev[prev.length-1]?.dryEyeRisk as number || 25),
+          };
+          return [...prev.slice(1), newPoint];
+        });
+      }
     }
   }, [data, module, isMonitoring, isConnected]);
 
@@ -303,10 +308,10 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
         {/* 1. 主评分区域 (3/4 width) */}
         <MemoizedGlassCard className={`md:col-span-3 md:row-span-2 ${theme.cardBg} ${theme.cardBorder} flex flex-col items-center justify-center p-10 relative overflow-hidden group`}>
           <div className="absolute top-6 left-8 text-white/30 text-sm font-bold uppercase tracking-[0.2em]">{config.mainMetricLabel}</div>
-          <SemiCircularGauge value={isMonitoring ? mainValue : 0} module={module} />
+          <SemiCircularGauge value={mainValue} module={module} />
           <div className="mt-2 flex items-center gap-3 bg-white/5 px-6 py-2 rounded-full border border-white/5 backdrop-blur-md">
-            <div className={`w-2.5 h-2.5 rounded-full ${isConnected && isMonitoring ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-white/20'}`} />
-            <span className="text-sm font-medium text-white/60">{isConnected && isMonitoring ? '实时监测中' : isConnected ? '等待开始监测' : '等待设备连接...'}</span>
+            <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-white/20'}`} />
+            <span className="text-sm font-medium text-white/60">{isConnected ? (isMonitoring ? '实时监测中' : '监测暂停') : '等待设备连接...'}</span>
           </div>
         </MemoizedGlassCard>
 
