@@ -147,16 +147,21 @@ export function mapFatigueData(backend: BackendFatigueData | any): UnifiedMetric
   let alertLevel: string;
 
   if (isRawData) {
-    // 处理原始蓝牙数据 - 计算疲劳评分
-    console.log("[DataMapper] Processing raw bluetooth data");
-    const rawValues = actualData.rawData;
-    const avgValue = rawValues.reduce((a: number, b: number) => a + b, 0) / rawValues.length;
-    
-    // 简单的疲劳评分计算：基于原始数据的值
-    fatigueScore = Math.min(100, Math.max(0, Math.round(avgValue * 30)));
-    blinkRate = Math.round(20 + (avgValue * 5));
-    avgBlinkDuration = Math.round(200 + (avgValue * 50));
-    alertLevel = fatigueScore < 40 ? '正常' : fatigueScore < 70 ? '警告' : '危险';
+    // 处理原始蓝牙数据 - 仅用于连接状态回显，不更新核心指标
+    console.log("[DataMapper] 收到原始蓝牙数据包，跳过指标计算...");
+    return {
+      mainValue: 0,
+      mainValueLabel: '疲劳评分',
+      mainValueUnit: '分',
+      mainValueColor: 'white',
+      secondaryMetrics: [],
+      chartData: [],
+      status: {
+        connected: true,
+        signalQuality: actualData.signalQuality || 100,
+        lastUpdate: new Date().toISOString()
+      }
+    };
   } else if (typeof actualData.fatigueScore === 'number') {
     // 处理已计算的疲劳数据
     fatigueScore = actualData.fatigueScore;

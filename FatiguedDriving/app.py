@@ -10,7 +10,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
 import numpy as np
-from algorithm.blink_fatigue import run_fatigue_pipeline
+from algorithm.blink_fatigue import run_fatigue_pipeline, reset_fatigue_state
 from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
@@ -44,6 +44,7 @@ def to_jsonable(obj):
 # 数据缓冲区（使用统一模块）
 # =========================
 FATIGUE_WINDOW_SECONDS = 30
+CALIBRATION_DURATION_SECONDS = 6
 SAMPLING_RATE = 100
 
 data_buffer = DataBuffer(
@@ -211,12 +212,13 @@ def receive_bluetooth_data():
         # 疲劳算法：累积信号 + 定期评估
         try:
             if should_compute:
-                raw_np = data_buffer.get_signal_array()
+                # 只传当前批次的新样本，算法内部维护60s滑动窗口，避免重复喂入
+                raw_np = np.array(data_point["rawData"], dtype=float)
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
                     raw_np = raw_np[finite_mask]
 
-                if raw_np.size >= data_buffer.config.min_samples:
+                if raw_np.size >= 1:
                     t0 = time.time()
                     
                     driving_duration = datetime.now() - start_driving_time
@@ -225,11 +227,13 @@ def receive_bluetooth_data():
                     minutes = (total_seconds % 3600) // 60
                     driving_time_str = f"{hours}小时{minutes}分钟"
                     
+                    print(f"[ALGO] 开始计算疲劳评分... 样本数: {raw_np.size}")
                     fatigue_output = run_fatigue_pipeline(
                         raw_signal=raw_np,
                         sampling_rate=SAMPLING_RATE,
                         driving_time=driving_time_str,
-                        battery_level=None
+                        battery_level=None,
+                        calibration_duration_sec=CALIBRATION_DURATION_SECONDS
                     )
                     fatigue_output = to_jsonable(fatigue_output)
                     last_fatigue_output = fatigue_output
@@ -238,12 +242,16 @@ def receive_bluetooth_data():
 
                     dt_ms = (time.time() - t0) * 1000.0
                     print(
-                        f"[ALGO] FATIGUE computed | n={raw_np.size} | cost={dt_ms:.1f}ms "
-                        f"| score={fatigue_output.get('fatigueScore')} "
-                        f"| blinkRate={fatigue_output.get('blinkRate')}"
+                        f"[ALGO] 疲劳计算完成 | 耗时={dt_ms:.1f}ms "
+                        f"| 评分={fatigue_output.get('fatigueScore')} "
+                        f"| 眨眼频率={fatigue_output.get('blinkRate')}"
                     )
+                else:
+                    print(f"[ALGO] 样本数不足，跳过计算: {raw_np.size}/{data_buffer.config.min_samples}")
         except Exception as fe:
+            import traceback
             print("[ALGO] 疲劳算法计算失败：", fe)
+            print(traceback.format_exc())
 
         broadcast_data(data_point)
 
@@ -270,10 +278,11 @@ def clear_buffer():
     global last_fatigue_output, start_driving_time
     cleared_count = len(data_buffer.raw_buffer)
     data_buffer.clear()
+    reset_fatigue_state()
     last_fatigue_output = None
     start_driving_time = None
     data_stats["bufferSize"] = 0
-    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据")
+    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据（算法状态已重置）")
     return jsonify({"success": True, "message": f"已清空 {cleared_count} 条数据", "clearedCount": cleared_count})
 
 if __name__ == "__main__":
