@@ -10,7 +10,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
 import numpy as np
-from algorithm.blink_fatigue import run_fatigue_pipeline
+from algorithm.blink_fatigue import run_fatigue_pipeline, reset_fatigue_state
 from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
@@ -212,12 +212,13 @@ def receive_bluetooth_data():
         # 疲劳算法：累积信号 + 定期评估
         try:
             if should_compute:
-                raw_np = data_buffer.get_signal_array()
+                # 只传当前批次的新样本，算法内部维护60s滑动窗口，避免重复喂入
+                raw_np = np.array(data_point["rawData"], dtype=float)
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
                     raw_np = raw_np[finite_mask]
 
-                if raw_np.size >= data_buffer.config.min_samples:
+                if raw_np.size >= 1:
                     t0 = time.time()
                     
                     driving_duration = datetime.now() - start_driving_time
@@ -277,10 +278,11 @@ def clear_buffer():
     global last_fatigue_output, start_driving_time
     cleared_count = len(data_buffer.raw_buffer)
     data_buffer.clear()
+    reset_fatigue_state()
     last_fatigue_output = None
     start_driving_time = None
     data_stats["bufferSize"] = 0
-    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据")
+    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据（算法状态已重置）")
     return jsonify({"success": True, "message": f"已清空 {cleared_count} 条数据", "clearedCount": cleared_count})
 
 if __name__ == "__main__":

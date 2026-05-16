@@ -126,7 +126,7 @@ def simulate_continuous(name, voltage_sequence, duration_sec=15):
         print(f"  t={current_sec:5.1f}s | 电压: {current_voltage:.3f}V", end='\r')
         time.sleep(0.95)
     
-    print(f"\n✓ 场景完成")
+    print(f"\n[done]")
 
 def simulate_blinks(name, base_voltage, duration_sec, blink_sequence):
     """眨眼模式模拟"""
@@ -148,16 +148,16 @@ def simulate_blinks(name, base_voltage, duration_sec, blink_sequence):
         current_sec = i // SAMPLING_RATE
         current_voltage = batch[len(batch)//2]
 
-        blink_hint = f" <-- 眨眼({blink_times[current_sec]})" if current_sec in blink_times else ""
+        blink_hint = f" <-- blink({blink_times[current_sec]})" if current_sec in blink_times else ""
         ok = send_bluetooth_data(batch)
-        status = "✓" if ok else "✗"
-        print(f"  {status} t={current_sec:3d}s | 电压: {current_voltage:.3f}V{blink_hint}", end='\r')
+        status = "OK" if ok else "!!"
+        print(f"  [{status}] t={current_sec:3d}s | V: {current_voltage:.3f}V{blink_hint}", end='\r')
         if ok:
             success_count += 1
         time.sleep(0.95)
 
     total_batches = len(range(0, len(signal_data), batch_size))
-    print(f"\n✓ 场景完成 | 发送成功: {success_count}/{total_batches} 批")
+    print(f"\n[done] sent {success_count}/{total_batches} batches")
 
 def main():
     print("蓝牙数据模拟器")

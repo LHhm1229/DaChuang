@@ -130,7 +130,7 @@ def preprocess_eyelid_signal(
     cutoff = smooth_cutoff_hz / nyquist
     cutoff = float(min(max(cutoff, 1e-6), 0.999999))
 
-    b, a = signal.butter(8, cutoff, "lowpass")
+    b, a = signal.butter(4, cutoff, "lowpass")
     filtered_signal = signal.filtfilt(b, a, baseline_removed)
 
     if normalize:
@@ -164,7 +164,7 @@ def adaptive_preprocess_eyelid_signal(
         raw_signal=raw_signal,
         sampling_rate=sampling_rate,
         drift_window_sec=2.0,
-        smooth_cutoff_hz=3.5,
+        smooth_cutoff_hz=8.0,  # 3.5Hz 会把150ms眨眼展宽>50样本导致漏检，8Hz保留更多眨眼细节
         normalize=True,
         enhance_signal=True
     )
@@ -234,9 +234,9 @@ def extract_blink_features(
     dynamic_threshold = _compute_physical_threshold(x, factor=1.0)  # 降低factor提高灵敏度
     height_threshold = float(np.clip(dynamic_threshold, 0.2, 0.6))  # 降低阈值范围
     
-    # 峰宽度约束
-    min_width_samples = max(5, int(0.05 * sampling_rate))
-    max_width_samples = min(50, int(0.5 * sampling_rate))
+    # 峰宽度约束（max 放宽到 150 样本，适配 8Hz 滤波后的展宽量）
+    min_width_samples = max(3, int(0.03 * sampling_rate))
+    max_width_samples = min(150, int(1.5 * sampling_rate))
     
     # 3) 先在掩码区域外找峰值
     x_masked = x.copy()
@@ -286,7 +286,8 @@ def extract_blink_features(
     valleys: List[int] = []
     valid_peaks: List[int] = []
 
-    search_win = max(10, sampling_rate // 2)
+    # 谷值搜索范围：限制在峰值 ±search_win 样本内，避免把远处基线当成谷
+    search_win = max(10, sampling_rate // 2)  # 50 样本 = 500ms
 
     def local_min_idx(left: int, right: int) -> int:
         seg = x[left:right]
@@ -295,8 +296,14 @@ def extract_blink_features(
         return int(left + np.argmin(seg))
 
     for p in peaks_raw:
-        prev_vals = valley_candidates[valley_candidates < p]
-        next_vals = valley_candidates[valley_candidates > p]
+        # 只在 [p-search_win, p] 内找前谷，不取整个左侧所有候选
+        prev_vals = valley_candidates[
+            (valley_candidates < p) & (valley_candidates >= p - search_win)
+        ]
+        # 只在 [p, p+search_win] 内找后谷
+        next_vals = valley_candidates[
+            (valley_candidates > p) & (valley_candidates <= p + search_win)
+        ]
 
         if prev_vals.size > 0:
             pv = int(prev_vals[-1])
@@ -375,34 +382,11 @@ def extract_blink_features(
     features["blink_frequency"] = blink_frequency
     features["blink_rate_per_min"] = blink_frequency * 60.0
 
-    # 8) 持续时间
-    blink_durations_valley: List[float] = []
-    for p in peaks:
-        prev_vals = valleys[valleys < p]
-        next_vals = valleys[valleys > p]
-        if prev_vals.size == 0 or next_vals.size == 0:
-            continue
-        pv = int(prev_vals[-1])
-        nv = int(next_vals[0])
-        if pv < p < nv:
-            blink_durations_valley.append(float((nv - pv) / sampling_rate))
-
-    avg_dur_sec = float(np.mean(blink_durations_valley)) if blink_durations_valley else 0.0
-    std_dur_sec = float(np.std(blink_durations_valley)) if len(blink_durations_valley) > 1 else 0.0
-    features["avg_blink_duration"] = avg_dur_sec
-    features["blink_duration_ms"] = avg_dur_sec * 1000.0
-    
-    # 更新个人基准（用于适应性阈值）
-    if personal_baseline["sample_count"] < 100:
-        personal_baseline["avg_blink_duration"] = (
-            personal_baseline["avg_blink_duration"] * personal_baseline["sample_count"] + avg_dur_sec
-        ) / (personal_baseline["sample_count"] + 1)
-        personal_baseline["std_blink_duration"] = std_dur_sec
-        personal_baseline["sample_count"] += 1
-
-    # 9) 半高宽持续时间
-    durations_hwhm: List[float] = []
+    # 8) 持续时间：使用 HWHM（半高宽），不依赖噪声谷值，对稀疏信号更鲁棒
     global_min = float(np.min(x))
+    durations_hwhm: List[float] = []
+    hwhm_per_peak: dict = {}  # peak_idx -> hwhm_sec，供 detect_blink_events 分类用
+
     for p in peaks:
         half_height = float((x[p] + global_min) / 2.0)
 
@@ -414,12 +398,27 @@ def extract_blink_features(
         while right_idx < x.size - 1 and x[right_idx] > half_height:
             right_idx += 1
 
-        durations_hwhm.append(float((right_idx - left_idx) / sampling_rate))
+        hwhm_sec = float((right_idx - left_idx) / sampling_rate)
+        durations_hwhm.append(hwhm_sec)
+        hwhm_per_peak[int(p)] = hwhm_sec
 
-    features["avg_blink_duration_hwhm"] = float(np.mean(durations_hwhm)) if durations_hwhm else 0.0
+    avg_dur_sec = float(np.mean(durations_hwhm)) if durations_hwhm else 0.0
+    std_dur_sec = float(np.std(durations_hwhm)) if len(durations_hwhm) > 1 else 0.0
+    features["avg_blink_duration"] = avg_dur_sec
+    features["avg_blink_duration_hwhm"] = avg_dur_sec
+    features["blink_duration_ms"] = avg_dur_sec * 1000.0
+    features["blink_hwhm_per_peak"] = hwhm_per_peak
 
-    # 10) 眼闭合比例
-    total_blink_time = float(np.sum(blink_durations_valley)) if blink_durations_valley else 0.0
+    # 更新个人基准（用于适应性阈值）
+    if personal_baseline["sample_count"] < 100:
+        personal_baseline["avg_blink_duration"] = (
+            personal_baseline["avg_blink_duration"] * personal_baseline["sample_count"] + avg_dur_sec
+        ) / (personal_baseline["sample_count"] + 1)
+        personal_baseline["std_blink_duration"] = std_dur_sec
+        personal_baseline["sample_count"] += 1
+
+    # 9) 眼闭合比例：使用 HWHM 总时长
+    total_blink_time = float(sum(durations_hwhm)) if durations_hwhm else 0.0
     total_close_time_sec = total_close_time / sampling_rate
     total_blink_time += total_close_time_sec
     eye_closure_ratio_raw = (total_blink_time / total_time) * 100.0 if total_time > 0 else 0.0
@@ -547,6 +546,9 @@ def detect_blink_events(
     normal_blink_interval = avg_interval if avg_interval > 0 else 3.0
     incomplete_threshold = normal_blink_interval * 1.5
 
+    # 从 features 取每个峰的 HWHM，用于替代谷-谷距离做分类
+    hwhm_per_peak = features.get("blink_hwhm_per_peak", {})
+
     valid_events: List[Dict] = []
     for p in peaks:
         prev_vals = valleys[valleys < p]
@@ -560,15 +562,16 @@ def detect_blink_events(
             continue
 
         blink_amplitude = float(x[p] - x[start_idx])
-        blink_duration = float((end_idx - start_idx) / sampling_rate)
+        # 用 HWHM 作为分类依据，不受噪声谷值影响
+        hwhm_duration = hwhm_per_peak.get(int(p), float((end_idx - start_idx) / sampling_rate))
 
         event = {
             "start": start_idx,
             "peak": int(p),
             "end": end_idx,
             "amplitude": blink_amplitude,
-            "duration": blink_duration,
-            "duration_ms": blink_duration * 1000.0,
+            "duration": hwhm_duration,
+            "duration_ms": hwhm_duration * 1000.0,
             "eye_status": "closed",
         }
         valid_events.append(event)
@@ -923,7 +926,12 @@ def run_fatigue_pipeline(
         
         _fatigue_state.update(raw_np)
         window_data, window_duration = _fatigue_state.get_valid_window()
-        
+
+        # 前3秒数据不足，噪声会被误判为眨眼，直接跳过
+        if window_duration < 3.0:
+            print(f"[ALGO] 数据不足 {window_duration:.1f}s < 3.0s，跳过计算")
+            return _default_fatigue_output()
+
         # 检查数据质量
         data_quality = _fatigue_state.compute_data_quality()
         if data_quality < 0.5:
