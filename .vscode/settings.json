@@ -2,11 +2,11 @@
 "claudeCode.environmentVariables":[
  {
 "name": "HTTP_PROXY",
- "value": "http://127.0.0.1:7890"
+ "value": "http://127.0.0.1:7897"
  },
  {
  "name": "HTTPS_PROXY",
-"value": "http://127.0.0.1:7890"
+"value": "http://127.0.0.1:7897"
  }
  ]
 }

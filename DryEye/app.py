@@ -10,7 +10,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
 import numpy as np
-from algorithm.dry_eye import run_dry_eye_pipeline
+from algorithm.dry_eye import run_dry_eye_pipeline, reset_dry_eye_state
 from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
@@ -42,6 +42,7 @@ def to_jsonable(obj):
 # 数据缓冲区（使用统一模块）
 # =========================
 DRY_EYE_WINDOW_SECONDS = 10
+CALIBRATION_DURATION_SECONDS = 5
 SAMPLING_RATE = 100
 
 data_buffer = DataBuffer(
@@ -187,39 +188,34 @@ def receive_bluetooth_data():
 
         try:
             if should_compute:
-                raw_np = data_buffer.get_signal_array()
+                raw_np = np.array(data_point["rawData"], dtype=float)
                 finite_mask = np.isfinite(raw_np)
                 if not np.all(finite_mask):
-                    print(f"[ALGO] Found {len(raw_np) - np.sum(finite_mask)} invalid samples, filtered")
                     raw_np = raw_np[finite_mask]
 
-                if raw_np.size >= data_buffer.config.min_samples:
+                if raw_np.size >= 1:
                     t0 = time.time()
+                    print(f"[ALGO] 开始计算干眼症评分... 样本数: {raw_np.size}")
                     dry_eye_output = run_dry_eye_pipeline(
                         raw_signal=raw_np,
                         sampling_rate=SAMPLING_RATE,
-                        duration_sec=len(raw_np) / SAMPLING_RATE
+                        calibration_duration_sec=CALIBRATION_DURATION_SECONDS
                     )
                     dry_eye_output = to_jsonable(dry_eye_output)
                     last_dry_eye_output = dry_eye_output
 
-                    print(f"[ALGO] Compute success | riskScore={dry_eye_output.get('dryEyeRiskScore')} | blinkRate={dry_eye_output.get('blinkRate')}")
-                    
-                    eventlet.sleep(0.005)
                     broadcast_dry_eye(dry_eye_output)
 
                     dt_ms = (time.time() - t0) * 1000.0
                     print(
-                        f"[ALGO] DRY EYE computed | n={raw_np.size} | cost={dt_ms:.1f}ms "
-                        f"| riskScore={dry_eye_output.get('dryEyeRiskScore')} "
-                        f"| blinkRate={dry_eye_output.get('blinkRate')} "
-                        f"| incompleteRatio={dry_eye_output.get('incompleteBlinkRatio')} "
-                        f"| longBlinkRatio={dry_eye_output.get('longBlinkRatio')}"
+                        f"[ALGO] 干眼症计算完成 | 耗时={dt_ms:.1f}ms "
+                        f"| 评分={dry_eye_output.get('dryEyeRiskScore')} "
+                        f"| 眨眼频率={dry_eye_output.get('blinkRate')} "
+                        f"| 不完全={dry_eye_output.get('incompleteBlinkRatio')} "
+                        f"| 长眨眼={dry_eye_output.get('longBlinkRatio')}"
                     )
                 else:
-                    print(f"[ALGO] Not enough valid samples: {raw_np.size}/{data_buffer.config.min_samples}")
-            else:
-                print(f"[ALGO] Waiting for more samples: {len(data_buffer.signal_buffer)}/{data_buffer.config.min_samples}")
+                    print(f"[ALGO] 样本数不足，跳过计算: {raw_np.size}/{data_buffer.config.min_samples}")
         except Exception as fe:
             import traceback
             print(f"[ALGO] Computation failed: {fe}")
@@ -244,10 +240,11 @@ def clear_buffer():
     global last_dry_eye_output
     cleared_count = len(data_buffer.raw_buffer)
     data_buffer.clear()
+    reset_dry_eye_state()
     last_dry_eye_output = None
     data_stats["bufferSize"] = 0
 
-    print(f"[BUFFER] Cleared {cleared_count} items from buffer")
+    print(f"[BUFFER] 数据缓冲区已清空，清除了 {cleared_count} 条数据（算法状态已重置）")
 
     return jsonify({
         "success": True,
@@ -256,7 +253,7 @@ def clear_buffer():
     })
 
 if __name__ == '__main__':
-    PORT = 3001
+    PORT = 3000
     print("[服务器] 干眼症后端服务启动中...")
     print(f"   访问地址: http://localhost:{PORT}")
     print(f"   WebSocket: http://localhost:{PORT}/socket.io")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Optional
 import numpy as np
 from scipy import signal
 from scipy.ndimage import median_filter
@@ -11,292 +11,289 @@ __all__ = [
     "compute_dry_eye_metrics",
     "assess_dry_eye_risk",
     "run_dry_eye_pipeline",
+    "reset_dry_eye_state",
 ]
 
 
+# =========================
+# 辅助函数
+# =========================
+
 def sigmoid(x: np.ndarray, midpoint: float = 0.0, steepness: float = 1.0) -> np.ndarray:
-    """Sigmoid 函数，用于平滑过渡"""
     return 1 / (1 + np.exp(-steepness * (x - midpoint)))
 
 
-def quantile_normalize(
-    signal: np.ndarray,
-    lower_quantile: float = 0.05,
-    upper_quantile: float = 0.95
-) -> np.ndarray:
-    """
-    分位数归一化 - 解决全局极值导致的信号压缩问题
-    使用 5% 和 95% 分位数代替绝对极值
-    """
-    lower = np.quantile(signal, lower_quantile)
-    upper = np.quantile(signal, upper_quantile)
+def quantile_normalize(sig: np.ndarray, lower_q: float = 0.05, upper_q: float = 0.95) -> np.ndarray:
+    """分位数归一化，用 5%/95% 分位数代替绝对极值，避免单个尖峰压缩整体范围"""
+    lower = float(np.quantile(sig, lower_q))
+    upper = float(np.quantile(sig, upper_q))
     range_val = upper - lower
-    
     if range_val < 1e-6:
-        return (signal - np.mean(signal)) / (np.std(signal) + 1e-6)
-    
-    normalized = (signal - lower) / range_val
-    # 裁剪到 [0, 1] 范围
-    normalized = np.clip(normalized, 0, 1)
-    return normalized
+        # 信号基本平坦，返回近零值；后续极性翻转后得到全1，检测器不会找到事件
+        return (sig - np.mean(sig)) / (float(np.std(sig)) + 1e-6)
+    normalized = (sig - lower) / range_val
+    return np.clip(normalized, 0.0, 1.0)
 
 
-def highpass_filter(
-    signal: np.ndarray,
-    sampling_rate: int,
-    cutoff_freq: float = 0.5
-) -> np.ndarray:
-    """
-    高通滤波 - 去除基线漂移
-    使用 Butterworth 滤波器设计
-    """
+def highpass_filter(sig: np.ndarray, sampling_rate: int, cutoff_freq: float = 0.5) -> np.ndarray:
+    """Butterworth 高通滤波，去除基线漂移（参数名 sig 避免覆盖 scipy.signal 模块名）"""
     nyquist = 0.5 * sampling_rate
     b, a = signal.butter(4, cutoff_freq / nyquist, btype='high')
-    return signal.filtfilt(b, a, signal)
+    return signal.filtfilt(b, a, sig)
 
+
+def _compute_signal_quality(sig: np.ndarray) -> float:
+    """信号质量估计 [0,1]：波动过小或饱和均扣分"""
+    if sig.size < 10:
+        return 0.0
+    amp = float(np.percentile(sig, 95) - np.percentile(sig, 5))
+    amp_score = float(np.clip(amp / 0.25, 0.0, 1.0))
+    sat_ratio = float(np.mean((sig < 0.01) | (sig > 0.99)))
+    sat_score = 1.0 - float(np.clip(sat_ratio / 0.30, 0.0, 1.0))
+    return float(np.clip(0.6 * amp_score + 0.4 * sat_score, 0.0, 1.0))
+
+
+# =========================
+# 预处理
+# =========================
+
+def preprocess_and_calibrate(
+    raw_signal: np.ndarray,
+    sampling_rate: int = 100,
+    highpass_cutoff: float = 0.5
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    返回 (normalized_signal, raw_signal_copy)。
+    normalized 用于检测，raw_signal_copy 用于不完全眨眼振幅判断。
+
+    平坦信号检测：
+      对滤波后的信号，若峰峰值 < 5 × 噪声基底（MAD），视为无意义信号，
+      直接返回全 0.5（检测器得到 diff=0，不会找到任何事件）。
+    """
+    signal_raw = raw_signal.copy()
+
+    # 高通滤波去除基线漂移
+    filtered = highpass_filter(raw_signal, sampling_rate, highpass_cutoff)
+
+    # 平坦信号判断（MAD 估计噪声基底）
+    noise_floor = float(np.median(np.abs(np.diff(filtered)))) + 1e-9
+    signal_range = float(np.max(filtered) - np.min(filtered))
+    if signal_range < 5.0 * noise_floor:
+        return np.full_like(filtered, 0.5), signal_raw
+
+    # 分位数归一化
+    normalized = quantile_normalize(filtered)
+
+    # 极性校正：确保眨眼特征为向下波谷
+    if len(normalized) > 1:
+        diff = np.diff(normalized)
+        neg_ratio = float(np.sum(diff < 0) / len(diff))
+        if neg_ratio < 0.4:
+            normalized = 1.0 - normalized
+
+    return normalized, signal_raw
+
+
+# =========================
+# 眨眼事件检测
+# =========================
 
 def detect_blink_events_wavelet(
     signal_norm: np.ndarray,
     signal_raw: np.ndarray,
     sampling_rate: int = 100,
-    amplitude_thresh: float = 0.05,
-    min_duration_ms: float = 30,
-    max_duration_ms: float = 2000,
-    refractory_ms: float = 100
+    amplitude_thresh: float = 0.15,
+    min_duration_ms: float = 50.0,
+    max_duration_ms: float = 2000.0,
+    refractory_ms: float = 100.0
 ) -> List[Dict]:
     """
-    基于一阶差分与形态学的眨眼事件检测
-    
+    基于一阶差分 + 形态学过滤的眨眼检测。
+
     改进点：
-    1. 使用 scipy 中值滤波替代纯 Python 实现
-    2. 增加伪影识别（基于波形对称性和斜率合理性）
-    3. 动态基线追踪
-    4. 使用原始信号幅值判断不完全眨眼
+    - scipy median_filter（C 实现，比纯 Python 快 10x）
+    - 动态基线追踪（500ms 滑动中值）
+    - 对称性检查（symmetry_ratio > 0.3）过滤伪影
+    - 斜率方差检查（slope_variance < 0.1）过滤尖峰噪声
+    - amplitude_thresh = 0.15（高于典型噪声 < 0.1）
     """
-    events = []
+    events: List[Dict] = []
     n = len(signal_norm)
     refractory_samples = int(refractory_ms * sampling_rate / 1000)
-    min_duration_samples = int(min_duration_ms * sampling_rate / 1000)
-    max_duration_samples = int(max_duration_ms * sampling_rate / 1000)
+    min_dur_samples = int(min_duration_ms * sampling_rate / 1000)
+    max_dur_samples = int(max_duration_ms * sampling_rate / 1000)
 
-    # 使用 scipy 中值滤波（C语言实现，性能提升10x+）
-    window_size = max(3, int(sampling_rate * 0.02))
-    if window_size % 2 == 0:
-        window_size += 1
-    smoothed = median_filter(signal_norm, size=window_size)
-    
-    # 计算差分和二阶差分（用于形态学分析）
-    diff = np.diff(smoothed)
-    diff2 = np.diff(diff)  # 二阶差分用于判断波形对称性
+    # 中值平滑（窗口必须为奇数）
+    win = max(3, int(sampling_rate * 0.02))
+    if win % 2 == 0:
+        win += 1
+    smoothed = median_filter(signal_norm, size=win)
 
-    # 动态基线追踪 - 使用滑动窗口中值
-    baseline_window = int(sampling_rate * 0.5)  # 500ms 窗口
-    baseline = signal.medfilt(signal_norm, baseline_window)
+    diff1 = np.diff(smoothed)
+    diff2 = np.diff(diff1)
+
+    # 动态基线（500ms 窗口，必须奇数）
+    bl_win = int(sampling_rate * 0.5)
+    if bl_win % 2 == 0:
+        bl_win += 1
+    baseline = signal.medfilt(signal_norm, bl_win)
 
     i = 0
     while i < n - 1:
-        # 不应期检查
         if i < refractory_samples:
             i += 1
             continue
 
-        # 检测眨眼起始（负斜率）
-        if diff[i] < -amplitude_thresh / 3:
+        # 下降沿触发
+        if diff1[i] < -amplitude_thresh / 3:
             start = i
-            
+
             # 寻找波谷
             valley = start
             while valley < n - 2 and smoothed[valley + 1] <= smoothed[valley]:
                 valley += 1
-            
-            # 寻找恢复点（使用动态基线）
+
+            # 寻找恢复点
             end = valley
-            target_level = baseline[start] - amplitude_thresh * 0.3
-            while end < n - 1 and smoothed[end] < target_level:
+            target = baseline[start] - amplitude_thresh * 0.3
+            while end < n - 1 and smoothed[end] < target:
                 end += 1
 
-            # 检查持续时间是否在合理范围
-            duration_samples = end - start
-            if duration_samples > max_duration_samples or duration_samples < min_duration_samples:
+            dur_samples = end - start
+            if dur_samples < min_dur_samples or dur_samples > max_dur_samples:
                 i = valley + 1
                 continue
 
-            # 计算振幅（同时使用归一化信号和原始信号）
-            norm_amplitude = smoothed[start] - smoothed[valley]
-            raw_amplitude = np.max(signal_raw[start:end+1]) - np.min(signal_raw[start:end+1])
-            
-            # 形态学过滤 - 检测伪影
-            # 1. 检查波形对称性（上升沿与下降沿时长比例）
+            norm_amp = float(smoothed[start] - smoothed[valley])
+            safe_end = min(end + 1, len(signal_raw))
+            raw_amp = float(np.max(signal_raw[start:safe_end]) - np.min(signal_raw[start:safe_end]))
+
+            # 对称性：上升沿 vs 下降沿时长比
             rise_time = valley - start
             fall_time = end - valley
-            symmetry_ratio = min(rise_time, fall_time) / (max(rise_time, fall_time) + 1e-6)
-            
-            # 2. 检查斜率合理性（使用二阶差分方差判断平滑度）
-            segment_diff2 = diff2[start:end] if end - start > 2 else np.array([])
-            slope_variance = np.var(segment_diff2) if len(segment_diff2) > 0 else 0
-            
-            # 3. 检查是否为有效眨眼
-            is_valid_blink = (
-                norm_amplitude >= amplitude_thresh and
-                symmetry_ratio > 0.3 and  # 至少有一定对称性
-                slope_variance < 0.1       # 斜率变化不应过于剧烈
-            )
+            symmetry_ratio = float(min(rise_time, fall_time) / (max(rise_time, fall_time) + 1e-6))
 
-            if is_valid_blink:
-                duration_sec = duration_samples / sampling_rate
+            # 斜率平滑度（二阶差分方差）
+            seg = diff2[start:end] if end - start > 2 else np.array([])
+            slope_var = float(np.var(seg)) if seg.size > 0 else 0.0
+
+            if norm_amp >= amplitude_thresh and symmetry_ratio > 0.3 and slope_var < 0.1:
+                dur_sec = dur_samples / sampling_rate
                 events.append({
                     'start': start,
                     'valley': valley,
                     'end': end,
-                    'amplitude': norm_amplitude,
-                    'raw_amplitude': raw_amplitude,
-                    'duration_sec': duration_sec,
-                    'duration_ms': duration_sec * 1000,
+                    'amplitude': norm_amp,
+                    'raw_amplitude': raw_amp,
+                    'duration_sec': dur_sec,
+                    'duration_ms': dur_sec * 1000.0,
                     'symmetry_ratio': symmetry_ratio,
-                    'is_incomplete': raw_amplitude < 0.5  # 使用原始信号判断不完全眨眼
                 })
                 i = end + refractory_samples
             else:
                 i = valley + 1
         else:
             i += 1
-            
+
     return events
 
 
-def compute_dry_eye_metrics(
-    events: List[Dict],
-    total_duration_sec: float
-) -> Dict:
-    """
-    计算干眼症相关指标
-    """
+# =========================
+# 指标计算
+# =========================
+
+def compute_dry_eye_metrics(events: List[Dict], total_duration_sec: float) -> Dict:
     n_blinks = len(events)
     if n_blinks == 0:
         return {
-            'blink_rate_per_min': 0,
-            'avg_blink_duration_ms': 0,
-            'eye_closure_ratio_pct': 0,
-            'incomplete_blink_ratio_pct': 100.0,
-            'long_blink_ratio_pct': 0,
-            'total_blinks': 0,
-            'incomplete_blinks': 0,
-            'long_blinks': 0,
-            'avg_symmetry_ratio': 0.0
+            'blink_rate_per_min': 0, 'avg_blink_duration_ms': 0,
+            'eye_closure_ratio_pct': 0, 'incomplete_blink_ratio_pct': 100.0,
+            'long_blink_ratio_pct': 0, 'total_blinks': 0,
+            'incomplete_blinks': 0, 'long_blinks': 0, 'avg_symmetry_ratio': 0.0,
         }
 
     durations_ms = [e['duration_ms'] for e in events]
-    amplitudes = [e['amplitude'] for e in events]
     raw_amplitudes = [e['raw_amplitude'] for e in events]
     symmetries = [e['symmetry_ratio'] for e in events]
 
-    avg_dur_ms = np.mean(durations_ms)
-    avg_symmetry = np.mean(symmetries)
-    rate_per_min = n_blinks / (total_duration_sec / 60)
+    avg_dur_ms = float(np.mean(durations_ms))
+    avg_symmetry = float(np.mean(symmetries))
+    rate_per_min = n_blinks / (total_duration_sec / 60.0)
     total_blink_sec = sum(e['duration_sec'] for e in events)
-    closure_ratio = (total_blink_sec / total_duration_sec) * 100
-    closure_ratio = min(closure_ratio, 100.0)
+    closure_ratio = min((total_blink_sec / total_duration_sec) * 100.0, 100.0)
 
-    # 使用原始信号幅值判断不完全眨眼（而非归一化后的值）
-    # 不完全眨眼的判定基于原始信号的物理特性
-    avg_raw_amplitude = np.mean(raw_amplitudes) if raw_amplitudes else 0
-    # 动态阈值：基于所有眨眼的平均幅值来判断
-    incomplete_thresh = avg_raw_amplitude * 0.6  # 低于平均幅值60%视为不完全眨眼
+    # 不完全眨眼：动态阈值（低于平均振幅 60% 视为不完全）
+    avg_raw_amp = float(np.mean(raw_amplitudes)) if raw_amplitudes else 0.0
+    incomplete_thresh = avg_raw_amp * 0.6
     incomplete_count = sum(1 for a in raw_amplitudes if a < incomplete_thresh)
     incomplete_ratio = incomplete_count / n_blinks
 
-    long_blink_count = sum(1 for d in durations_ms if d >= 500)
+    long_blink_count = sum(1 for d in durations_ms if d >= 500.0)
     long_blink_ratio = long_blink_count / n_blinks
 
     result = {
         'blink_rate_per_min': round(rate_per_min, 1),
         'avg_blink_duration_ms': round(avg_dur_ms, 1),
         'eye_closure_ratio_pct': round(closure_ratio, 1),
-        'incomplete_blink_ratio_pct': round(incomplete_ratio * 100, 1),
-        'long_blink_ratio_pct': round(long_blink_ratio * 100, 1),
+        'incomplete_blink_ratio_pct': round(incomplete_ratio * 100.0, 1),
+        'long_blink_ratio_pct': round(long_blink_ratio * 100.0, 1),
         'total_blinks': n_blinks,
         'incomplete_blinks': incomplete_count,
         'long_blinks': long_blink_count,
         'avg_symmetry_ratio': round(avg_symmetry, 3),
-        'avg_raw_amplitude': round(avg_raw_amplitude, 3)
     }
-    
-    print(f"[ALGO] 检测到 {n_blinks} 次眨眼 | 频率={result['blink_rate_per_min']}/min | 闭合={result['eye_closure_ratio_pct']}% | 不完全={result['incomplete_blink_ratio_pct']}%")
+    print(f"[ALGO-DRY] {n_blinks} 次眨眼 | 频率={result['blink_rate_per_min']}/min | "
+          f"闭合={result['eye_closure_ratio_pct']}% | 不完全={result['incomplete_blink_ratio_pct']}%")
     return result
 
+
+# =========================
+# 风险评分
+# =========================
 
 def assess_dry_eye_risk(
     blink_rate: float,
     avg_dur_ms: float,
     closure_ratio: float,
     incomplete_ratio_pct: float,
-    long_blink_ratio_pct: float = 0,
-    avg_symmetry_ratio: float = 0.5
+    long_blink_ratio_pct: float = 0.0,
+    avg_symmetry_ratio: float = 0.5,
 ) -> Tuple[float, str, Dict]:
     """
-    评估干眼症风险
-    
-    改进点：使用 Sigmoid 函数替代硬编码分段函数，实现平滑过渡
+    用 Sigmoid 函数实现平滑 U 型/递增曲线，避免硬编码分段带来的跳变。
     """
-    
-    # 1. 频率得分 (U型曲线：正常 15-25次/分钟)
-    # 使用两个 Sigmoid 函数组合实现 U 型曲线
-    freq_low = sigmoid(blink_rate, midpoint=15, steepness=-0.3)  # 低于15时风险增加
-    freq_high = sigmoid(blink_rate, midpoint=25, steepness=0.2)  # 高于25时风险增加
-    freq_score = 100 * (freq_low * freq_high + (1 - freq_low) * (1 - freq_high))
-    # 调整：正常范围内得分低，两端得分高
-    freq_score = 100 * (sigmoid(blink_rate, 10, -0.4) + sigmoid(blink_rate, 30, 0.4)) / 2
-
-    # 2. 时长得分 (U型曲线：正常 100-250ms)
-    dur_low = sigmoid(avg_dur_ms, midpoint=100, steepness=-0.02)
-    dur_high = sigmoid(avg_dur_ms, midpoint=250, steepness=0.01)
-    dur_score = 100 * (sigmoid(avg_dur_ms, 75, -0.03) + sigmoid(avg_dur_ms, 300, 0.015)) / 2
-
-    # 3. 闭合比例得分 (U型曲线：正常 3% - 8%)
-    closure_score = 100 * (sigmoid(closure_ratio, 2, -2) + sigmoid(closure_ratio, 10, 1.5)) / 2
-
-    # 4. 不完全眨眼得分 (递增曲线)
-    inc_score = 100 * sigmoid(incomplete_ratio_pct, midpoint=40, steepness=0.08)
-
-    # 5. 长时间眨眼得分 (递增曲线)
-    long_score = 100 * sigmoid(long_blink_ratio_pct, midpoint=20, steepness=0.15)
-
-    # 6. 对称性得分 (波形质量)
-    symmetry_score = 100 * (1 - sigmoid(avg_symmetry_ratio, midpoint=0.6, steepness=10))
+    # 频率 U 型（正常 15~25 次/分钟）
+    freq_score = 100.0 * (sigmoid(blink_rate, 10, -0.4) + sigmoid(blink_rate, 30, 0.4)) / 2.0
+    # 时长 U 型（正常 100~250ms）
+    dur_score = 100.0 * (sigmoid(avg_dur_ms, 75, -0.03) + sigmoid(avg_dur_ms, 300, 0.015)) / 2.0
+    # 闭合比例 U 型（正常 3%~8%）
+    closure_score = 100.0 * (sigmoid(closure_ratio, 2, -2) + sigmoid(closure_ratio, 10, 1.5)) / 2.0
+    # 不完全眨眼（递增）
+    inc_score = 100.0 * sigmoid(incomplete_ratio_pct, midpoint=40, steepness=0.08)
+    # 长眨眼（递增）
+    long_score = 100.0 * sigmoid(long_blink_ratio_pct, midpoint=20, steepness=0.15)
+    # 对称性（越高越好，低对称 = 可疑噪声）
+    symmetry_score = 100.0 * (1.0 - sigmoid(avg_symmetry_ratio, midpoint=0.6, steepness=10))
 
     weights = {
-        'freq': 0.15,
-        'duration': 0.15,
-        'closure': 0.25,
-        'incomplete': 0.25,
-        'long': 0.10,
-        'symmetry': 0.10
+        'freq': 0.15, 'duration': 0.15, 'closure': 0.25,
+        'incomplete': 0.25, 'long': 0.10, 'symmetry': 0.10,
     }
-    
     risk_score = (
-        freq_score * weights['freq'] +
-        dur_score * weights['duration'] +
-        closure_score * weights['closure'] +
-        inc_score * weights['incomplete'] +
-        long_score * weights['long'] +
-        symmetry_score * weights['symmetry']
+        freq_score * weights['freq'] + dur_score * weights['duration'] +
+        closure_score * weights['closure'] + inc_score * weights['incomplete'] +
+        long_score * weights['long'] + symmetry_score * weights['symmetry']
     )
-
-    # 如果频率为0，强制高风险
     if blink_rate == 0:
         risk_score = max(risk_score, 90.0)
 
-    risk_score = min(100.0, max(0.0, risk_score))
-
-    # 风险等级（使用平滑过渡）
-    risk_levels = ["低风险", "中风险", "高风险"]
-    level_index = np.digitize(risk_score, [30, 60])
-    level = risk_levels[min(level_index, 2)]
+    risk_score = float(np.clip(risk_score, 0.0, 100.0))
+    level = ["低风险", "中风险", "高风险"][min(int(np.digitize(risk_score, [30, 60])), 2)]
 
     detail = {
         "blink_rate_per_min": blink_rate,
         "avg_blink_duration_ms": avg_dur_ms,
-        "closure_sec_per_min": round(closure_ratio / 100 * 60, 2),
+        "closure_sec_per_min": round(closure_ratio / 100.0 * 60.0, 2),
         "incomplete_blink_ratio_pct": incomplete_ratio_pct,
         "long_blink_ratio_pct": long_blink_ratio_pct,
         "avg_symmetry_ratio": avg_symmetry_ratio,
@@ -305,63 +302,168 @@ def assess_dry_eye_risk(
         "debug_scores": (
             f"F:{int(freq_score)} D:{int(dur_score)} C:{int(closure_score)} "
             f"I:{int(inc_score)} L:{int(long_score)} S:{int(symmetry_score)}"
-        )
+        ),
     }
-    
     return risk_score, level, detail
 
 
-def preprocess_and_calibrate(
-    raw_signal: np.ndarray,
-    sampling_rate: int = 100,
-    highpass_cutoff: float = 0.5
-) -> Tuple[np.ndarray, np.ndarray]:
+# =========================
+# 状态机（滑动窗口 + 校准）
+# =========================
+
+class DryEyePipelineState:
     """
-    预处理和校准信号
-    
-    改进点：
-    1. 分位数归一化替代全局极值归一化
-    2. 高通滤波去除基线漂移
-    3. 保留原始信号用于后续分析
+    滑动窗口缓存 + 冷启动校准。
+    算法内部维护最近 window_size_sec 秒的数据，
+    app.py 每次只传当前批次新样本，无需外部管理缓冲。
     """
-    # 保存原始信号副本用于不完全眨眼判断
-    signal_raw = raw_signal.copy()
-    
-    # 高通滤波去除基线漂移
-    filtered = highpass_filter(raw_signal, sampling_rate, highpass_cutoff)
-    
-    # 分位数归一化（使用5%和95%分位数）
-    normalized = quantile_normalize(filtered, lower_quantile=0.05, upper_quantile=0.95)
 
-    # 校正极性：确保眨眼特征表现为向下的波谷
-    if len(normalized) > 1:
-        diff = np.diff(normalized)
-        neg_ratio = np.sum(diff < 0) / len(diff)
-        if neg_ratio < 0.4:
-            normalized = 1 - normalized
+    def __init__(
+        self,
+        window_size_sec: float = 10.0,
+        sampling_rate: int = 100,
+        calibration_duration_sec: float = 5.0,
+    ):
+        self.window_size_sec = window_size_sec
+        self.window_size_samples = int(window_size_sec * sampling_rate)
+        self.sampling_rate = sampling_rate
+        self.buffer: List[float] = []
 
-    return normalized, signal_raw
+        self.calibration_duration_sec = calibration_duration_sec
+        self.is_calibrating = True
+        self.calibration_samples: List[float] = []
+        self.calibration_complete = False
 
+    def update(self, new_samples: np.ndarray) -> None:
+        samples = new_samples.tolist()
+
+        if self.is_calibrating:
+            self.calibration_samples.extend(samples)
+            cal_sec = len(self.calibration_samples) / self.sampling_rate
+            if cal_sec >= self.calibration_duration_sec:
+                self._complete_calibration()
+
+        self.buffer.extend(samples)
+        if len(self.buffer) > self.window_size_samples:
+            excess = len(self.buffer) - self.window_size_samples
+            self.buffer = self.buffer[excess:]
+
+    def _complete_calibration(self) -> None:
+        if self.calibration_complete:
+            return
+        self.is_calibrating = False
+        self.calibration_complete = True
+        dur = len(self.calibration_samples) / self.sampling_rate
+        print(f"[ALGO-DRY] 校准完成！{len(self.calibration_samples)} 个样本 ({dur:.1f}s)")
+
+    def get_valid_window(self) -> Tuple[np.ndarray, float]:
+        if self.is_calibrating:
+            data = np.array(self.calibration_samples, dtype=float)
+            return data, float(len(data) / self.sampling_rate)
+        if len(self.buffer) < 10:
+            return np.array([]), 0.0
+        data = np.array(self.buffer, dtype=float)
+        return data, float(len(data) / self.sampling_rate)
+
+    def compute_data_quality(self) -> float:
+        src = self.buffer if not self.is_calibrating else self.calibration_samples
+        if len(src) < 10:
+            return 0.0
+        x = np.array(src)
+        if float(np.max(x) - np.min(x)) < 0.01:
+            return 0.2
+        if float(np.var(x)) < 0.0001:
+            return 0.3
+        return 1.0
+
+
+# 全局单例（生命周期由 app.py 通过 reset_dry_eye_state 管理）
+_dry_eye_state: Optional[DryEyePipelineState] = None
+
+
+def _default_dry_eye_output(is_calibrating: bool = True) -> Dict:
+    return {
+        "blinkRate": 0.0,
+        "avgBlinkDuration": 0.0,
+        "eyeClosureRatio": 0.0,
+        "incompleteBlinkRatio": 0.0,
+        "longBlinkRatio": 0.0,
+        "dryEyeRiskScore": 0.0,
+        "dryEyeRiskLevel": "低风险",
+        "totalBlinks": 0,
+        "incompleteBlinks": 0,
+        "longBlinks": 0,
+        "avgSymmetryRatio": 0.0,
+        "isCalibrating": is_calibrating,
+        "dataQuality": 0.0,
+        "details": {
+            "dry_eye_risk_score": 0.0,
+            "dry_eye_risk_level": "低风险",
+            "debug_scores": "校准中..." if is_calibrating else "数据不足",
+        },
+    }
+
+
+def reset_dry_eye_state() -> None:
+    """切换用户或重新开始监测时调用，重置滑动窗口和校准状态"""
+    global _dry_eye_state
+    _dry_eye_state = None
+    print("[ALGO-DRY] 状态已重置")
+
+
+# =========================
+# 主入口
+# =========================
 
 def run_dry_eye_pipeline(
     raw_signal: np.ndarray,
     sampling_rate: int = 100,
-    duration_sec: float = None
+    duration_sec: float = None,
+    window_size_sec: float = 10.0,
+    calibration_duration_sec: float = 5.0,
 ) -> Dict:
     """
-    运行完整的干眼症检测流程
+    app.py 调用入口：每次只传当前批次新样本，算法内部维护滑动窗口。
+
+    流程：
+      new_samples → DryEyePipelineState（滑动窗口）
+                  → preprocess_and_calibrate（高通 + 分位数归一化 + 平坦检测 + 极性）
+                  → detect_blink_events_wavelet（差分检测 + 对称/斜率过滤）
+                  → compute_dry_eye_metrics
+                  → assess_dry_eye_risk（Sigmoid 评分）
     """
-    # 预处理（返回归一化信号和原始信号）
-    signal_norm, signal_raw = preprocess_and_calibrate(raw_signal, sampling_rate)
-    
-    # 检测眨眼事件（传入原始信号用于不完全眨眼判断）
+    global _dry_eye_state
+
+    raw_np = np.asarray(raw_signal, dtype=float)
+    finite_mask = np.isfinite(raw_np)
+    if not np.all(finite_mask):
+        raw_np = raw_np[finite_mask]
+
+    # 初始化状态机
+    if _dry_eye_state is None or _dry_eye_state.sampling_rate != sampling_rate:
+        _dry_eye_state = DryEyePipelineState(window_size_sec, sampling_rate, calibration_duration_sec)
+
+    _dry_eye_state.update(raw_np)
+    window_data, window_duration = _dry_eye_state.get_valid_window()
+
+    # 数据量不足
+    if window_duration < 3.0:
+        print(f"[ALGO-DRY] 数据不足 {window_duration:.1f}s，跳过")
+        return _default_dry_eye_output(is_calibrating=_dry_eye_state.is_calibrating)
+
+    # 数据质量检查
+    data_quality = _dry_eye_state.compute_data_quality()
+    if data_quality < 0.3:
+        print(f"[ALGO-DRY] 数据质量过低 {data_quality:.2f}，跳过")
+        return _default_dry_eye_output(is_calibrating=_dry_eye_state.is_calibrating)
+
+    # 预处理
+    signal_norm, signal_raw = preprocess_and_calibrate(window_data, sampling_rate)
+
+    # 眨眼检测
     events = detect_blink_events_wavelet(signal_norm, signal_raw, sampling_rate)
 
-    if duration_sec is None:
-        total_sec = len(raw_signal) / sampling_rate
-    else:
-        total_sec = duration_sec
-
+    total_sec = window_duration if duration_sec is None else duration_sec
     metrics = compute_dry_eye_metrics(events, total_sec)
     risk_score, risk_level, detail = assess_dry_eye_risk(
         blink_rate=metrics['blink_rate_per_min'],
@@ -369,10 +471,10 @@ def run_dry_eye_pipeline(
         closure_ratio=metrics['eye_closure_ratio_pct'],
         incomplete_ratio_pct=metrics['incomplete_blink_ratio_pct'],
         long_blink_ratio_pct=metrics['long_blink_ratio_pct'],
-        avg_symmetry_ratio=metrics['avg_symmetry_ratio']
+        avg_symmetry_ratio=metrics['avg_symmetry_ratio'],
     )
 
-    result = {
+    return {
         "blinkRate": metrics['blink_rate_per_min'],
         "avgBlinkDuration": metrics['avg_blink_duration_ms'],
         "eyeClosureRatio": metrics['eye_closure_ratio_pct'],
@@ -384,6 +486,7 @@ def run_dry_eye_pipeline(
         "incompleteBlinks": metrics['incomplete_blinks'],
         "longBlinks": metrics['long_blinks'],
         "avgSymmetryRatio": metrics['avg_symmetry_ratio'],
-        "details": detail
+        "isCalibrating": _dry_eye_state.is_calibrating,
+        "dataQuality": round(data_quality, 2),
+        "details": detail,
     }
-    return result

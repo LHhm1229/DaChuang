@@ -280,7 +280,7 @@ def clear_buffer():
 
 
 if __name__ == "__main__":
-    PORT = 3003
+    PORT = 3001
     print("[SERVER] Sleep Quality Backend started")
     print(f"   Access: http://localhost:{PORT}")
     print(f"   WebSocket: ws://localhost:{PORT}")
