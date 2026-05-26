@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python app.py)"
+      "Bash(python app.py)",
+      "PowerShell(Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd \"d:\\\\学习\\\\DaChuang\\\\HealthMonitoringSystem\"; npm run dev')"
     ]
   }
 }

@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 import json
 import time
 from datetime import datetime
@@ -15,8 +12,8 @@ from algorithm.data_buffer import DataBuffer, BufferConfig
 
 app = Flask(__name__)
 CORS(app, origins="*")
-socketio = SocketIO(app, 
-                   async_mode='eventlet',
+socketio = SocketIO(app,
+                   async_mode='threading',
                    ping_interval=25,
                    ping_timeout=120,
                    cors_allowed_origins="*")
@@ -294,4 +291,4 @@ if __name__ == "__main__":
     print(f"   GET stats: http://localhost:{PORT}/api/stats")
     print(f"   GET fat:   http://localhost:{PORT}/api/fatigue-latest")
     print(f"   clear:     http://localhost:{PORT}/api/clear-buffer\n")
-    socketio.run(app, host="0.0.0.0", port=PORT, debug=True)
+    socketio.run(app, host="0.0.0.0", port=PORT, debug=False, allow_unsafe_werkzeug=True)

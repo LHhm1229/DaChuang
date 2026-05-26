@@ -2,9 +2,6 @@ import json
 import time
 from datetime import datetime
 
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -16,8 +13,8 @@ from algorithm.data_buffer import DataBuffer, BufferConfig
 app = Flask(__name__)
 CORS(app, origins="*")
 
-socketio = SocketIO(app, 
-                   async_mode='eventlet',
+socketio = SocketIO(app,
+                   async_mode='threading',
                    ping_interval=25,
                    ping_timeout=120,
                    cors_allowed_origins="*")
@@ -262,4 +259,4 @@ if __name__ == '__main__':
     print(f"   API (POST 清空): http://localhost:{PORT}/api/clear-buffer")
     print("\n等待蓝牙数据...\n")
 
-    socketio.run(app, host='0.0.0.0', port=PORT, debug=True)
+    socketio.run(app, host='0.0.0.0', port=PORT, debug=False, allow_unsafe_werkzeug=True)

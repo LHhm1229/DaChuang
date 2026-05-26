@@ -8,7 +8,7 @@ import React, { useState, useEffect, memo, useRef } from 'react';
 import { GlassCard, GlassProgress, GlassBadge } from './ui';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { UnifiedMetricData, SecondaryMetric, ChartDataPoint } from '../services/dataMapper';
-import { Smartphone, Activity, Wind, Droplets, Thermometer, Zap, HardHat, Battery, Timer, RefreshCw, Power } from 'lucide-react';
+import { Smartphone, Activity, Wind, Droplets, Thermometer, Zap, HardHat, Battery, Timer, RefreshCw, Power, AlertTriangle, X } from 'lucide-react';
 
 // 1. 智能监测帽图标 - 极简科技感
 const SmartHatIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
@@ -231,9 +231,46 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [mainValue, setMainValue] = useState<number>(0);
   const [secondaryMetrics, setSecondaryMetrics] = useState<SecondaryMetric[]>([]);
-  
+  const [showAlert, setShowAlert] = useState(false);
+  const [alertDismissed, setAlertDismissed] = useState(false);
+  const soundPlayedRef = useRef(false);
+
+  // 各模块的报警阈值与文案
+  const alertConfigMap: Record<string, { threshold: number; title: string; message: string }> = {
+    'fatigue': {
+      threshold: 70,
+      title: '⚠ 重度疲劳警报',
+      message: '检测到极度疲劳状态，请立即靠边停车休息！'
+    },
+    'dry-eye': {
+      threshold: 60,
+      title: '⚠ 高度干眼风险警报',
+      message: '检测到高度干眼风险，请立即闭目休息并适当补充眼泪！'
+    }
+  };
+  const alertCfg = alertConfigMap[module];
+
   const config = moduleConfigs[module];
   const theme = getThemeColors(module);
+
+  const playAlertSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      [0, 0.35, 0.7].forEach(offset => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = 880;
+        osc.type = 'square';
+        gain.gain.setValueAtTime(0, ctx.currentTime + offset);
+        gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + offset + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + offset + 0.28);
+        osc.start(ctx.currentTime + offset);
+        osc.stop(ctx.currentTime + offset + 0.3);
+      });
+    } catch (_) { /* 浏览器不支持 AudioContext 时静默忽略 */ }
+  };
 
   const isConnected = connectionStatus === 'connected';
 
@@ -271,6 +308,22 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
     setChartData(initialData);
   }, []);
 
+  // 报警触发逻辑（支持 fatigue / dry-eye）
+  useEffect(() => {
+    if (!alertCfg) return;
+    if (mainValue >= alertCfg.threshold && !alertDismissed) {
+      setShowAlert(true);
+      if (!soundPlayedRef.current) {
+        playAlertSound();
+        soundPlayedRef.current = true;
+      }
+    } else if (mainValue < alertCfg.threshold) {
+      setShowAlert(false);
+      setAlertDismissed(false);
+      soundPlayedRef.current = false;
+    }
+  }, [mainValue, module, alertDismissed]);
+
   // 处理实时数据更新
   useEffect(() => {
     // 调试日志
@@ -301,12 +354,50 @@ export const UnifiedBentoDashboard: React.FC<UnifiedBentoDashboardProps> = ({
     }
   }, [data, module, isMonitoring, isConnected]);
 
+  const isAlerting = !!alertCfg && showAlert;
+
   return (
     <div className={`min-h-screen ${theme.bgGradient} text-white p-4 md:p-8 font-sans ${theme.selection}`}>
+
+      {/* 报警横幅（fatigue / dry-eye 共用） */}
+      {isAlerting && alertCfg && (
+        <>
+          <style dangerouslySetInnerHTML={{ __html: `
+            @keyframes alertFlash {
+              0%, 100% { background-color: rgba(185, 28, 28, 0.97); }
+              50% { background-color: rgba(239, 68, 68, 0.97); }
+            }
+            @keyframes alertBorder {
+              0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+              50% { box-shadow: 0 0 32px 8px rgba(239,68,68,0.5); }
+            }
+            .alert-banner { animation: alertFlash 0.8s ease-in-out infinite; }
+            .alert-ring { animation: alertBorder 0.8s ease-in-out infinite; }
+          `}} />
+          <div className="alert-banner fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-4 shadow-2xl border-b-2 border-red-400/60">
+            <div className="flex items-center gap-4">
+              <AlertTriangle size={36} className="text-white shrink-0 animate-bounce" />
+              <div>
+                <p className="text-white font-black text-xl tracking-widest uppercase">{alertCfg.title}</p>
+                <p className="text-red-100 text-sm font-medium mt-0.5">{alertCfg.message}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => { setShowAlert(false); setAlertDismissed(true); }}
+              className="flex items-center gap-2 text-white/90 hover:text-white px-4 py-2 rounded-lg bg-white/20 hover:bg-white/30 transition-colors font-bold text-sm shrink-0 ml-4"
+            >
+              <X size={16} />已知晓
+            </button>
+          </div>
+          {/* 顶部占位，防止横幅遮挡内容 */}
+          <div className="h-16" />
+        </>
+      )}
+
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-6">
-        
+
         {/* 1. 主评分区域 (3/4 width) */}
-        <MemoizedGlassCard className={`md:col-span-3 md:row-span-2 ${theme.cardBg} ${theme.cardBorder} flex flex-col items-center justify-center p-10 relative overflow-hidden group`}>
+        <MemoizedGlassCard className={`md:col-span-3 md:row-span-2 ${theme.cardBg} ${isAlerting ? 'border-red-500/70 alert-ring' : theme.cardBorder} flex flex-col items-center justify-center p-10 relative overflow-hidden group`}>
           <div className="absolute top-6 left-8 text-white/30 text-sm font-bold uppercase tracking-[0.2em]">{config.mainMetricLabel}</div>
           <SemiCircularGauge value={mainValue} module={module} />
           <div className="mt-2 flex items-center gap-3 bg-white/5 px-6 py-2 rounded-full border border-white/5 backdrop-blur-md">
